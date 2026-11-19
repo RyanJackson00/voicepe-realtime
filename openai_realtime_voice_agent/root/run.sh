@@ -45,6 +45,9 @@ MCP_TOOL_ALLOWLIST=$(bashio::config 'mcp_tool_allowlist')
 OPENCLAW_URL=$(bashio::config 'openclaw_url')
 ANNOUNCE_PORT=$(bashio::config 'announce_port')
 ANNOUNCE_TOKEN=$(bashio::config 'announce_token')
+# Office-only CasaTunes response canary (disabled by default).
+CASATUNES_BRIDGE_ENABLED=$(bashio::config 'casatunes_bridge_enabled')
+CASATUNES_OFFICE_DEVICE_ID=$(bashio::config 'casatunes_office_device_id')
 # Per-device settings, as JSON (app/device_config.py).
 # bashio prints each list entry as JSON; jq -s gathers them into one array.
 DEVICES_JSON=$(bashio::config 'devices' | jq -sc '[.[] | objects]' 2>/dev/null || echo '[]')
@@ -108,6 +111,8 @@ export MCP_TOOL_ALLOWLIST
 export OPENCLAW_URL
 export ANNOUNCE_PORT
 export ANNOUNCE_TOKEN
+export CASATUNES_BRIDGE_ENABLED
+export CASATUNES_OFFICE_DEVICE_ID
 export DEVICES_JSON
 export WEBSOCKET_PORT
 export SESSION_REUSE_TIMEOUT_SECONDS
