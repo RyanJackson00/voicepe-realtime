@@ -32,6 +32,7 @@ from app.phase_emitter import PhaseEmitter
 from app.followup_hold import FollowUpHold
 from app.output_lead_buffer import OutputLeadBuffer
 from app.transcript_logger import TranscriptLogger
+from app.casatunes_realtime import CasaTunesRealtimeOutput
 from app.turn_timeline import TurnTimeline
 from app.input_replay import InputReplayBuffer
 from app.wake_events import WakeAudioCapture, WakeEventStore
@@ -920,6 +921,14 @@ class WebSocketHandler:
                 openai_service,
                 TranscriptLogger(capture="assistant"),
             ])
+
+        # gpt-realtime-2 (the currently installed model) uses Pipecat, not
+        # GPT-Live's LiveReplyAdmission. The bridge is a no-op unless its
+        # environment opt-in and exact Office device ID are both configured.
+        # Position after the assistant transcript tap/aggregator and before
+        # phase/transport so buffered PCM cannot reach the satellite early.
+        if isinstance(openai_service, OpenAIRealtimeLLMService):
+            pipeline_components.append(CasaTunesRealtimeOutput(device_id=client_id))
 
         pipeline_components.append(TimelineMetricsTap(lambda: connection.turn_timeline))
 
