@@ -141,6 +141,9 @@ options:
   # "Authorization: Bearer <announce_token>" plays the message on the device.
   announce_port: 0
   announce_token: ""
+  # Canary only: Office responses through CasaTunes. Disabled until tested.
+  casatunes_bridge_enabled: false
+  casatunes_office_device_id: ""
   # Several Voice PEs on this one add-on: name each device and, optionally,
   # give it the port it connects to and its own settings. Empty = one
   # instance-wide set of settings (see the add-on Documentation tab, "Several devices").
@@ -225,6 +228,8 @@ schema:
   openclaw_url: str
   announce_port: int(0,65535)
   announce_token: str
+  casatunes_bridge_enabled: bool
+  casatunes_office_device_id: str?
   devices:
     - name: str
       port: "int(1024,65535)?"
