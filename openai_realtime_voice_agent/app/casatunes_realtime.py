@@ -35,8 +35,8 @@ _LOG = logging.getLogger(__name__)
 # A cautious initial canary: don't route confirmations or security actions
 # until device-playback evidence/cancellation is implemented.
 _CONFIRMATION_RE = re.compile(
-    r"\\b(confirm|confirmation|are you sure|yes or no|shall i|may i|"
-    r"unlock|lock|garage|gate|alarm|disarm|arm the|open the door)\\b",
+    r"\b(confirm|confirmation|are you sure|yes or no|shall i|may i|"
+    r"unlock|lock|garage|gate|alarm|disarm|arm the|open the door)\b",
     re.IGNORECASE,
 )
 
