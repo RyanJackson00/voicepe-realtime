@@ -4,9 +4,10 @@ import unittest
 from unittest.mock import AsyncMock
 
 from pipecat.frames.frames import (
+    AggregationType,
+    InterruptionFrame,
     LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,
-    StartInterruptionFrame,
     TTSAudioRawFrame,
     TTSTextFrame,
 )
@@ -29,21 +30,21 @@ def bridge(office="office-id", enabled=True):
 
 
 def audio():
-    return TTSAudioRawFrame(audio=b"\\x00\\x01" * 10, sample_rate=24000, num_channels=1)
+    return TTSAudioRawFrame(audio=b"\x00\x01" * 10, sample_rate=24000, num_channels=1)
 
 
 class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
     async def make_processor(self, device_id="office-id", success=True, enabled=True):
         b = bridge(enabled=enabled)
         b.speak.return_value = success
-        gate = CasaTunesRealtimeOutput(device_id=device_id, bridge=b)
+        gate = CasaTunesRealtimeOutput(device_id=device_id, bridge=b, enable_direct_mode=True)
         gate.push_frame = AsyncMock()
         return gate, b
 
     async def reply(self, gate, text="Hello from Jarvis"):
         for frame in (
             LLMFullResponseStartFrame(),
-            TTSTextFrame(text),
+            TTSTextFrame(text, aggregated_by=AggregationType.SENTENCE),
             audio(),
             LLMFullResponseEndFrame(),
         ):
@@ -54,7 +55,7 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
     async def test_office_success_withholds_satellite_audio(self):
         gate, b = await self.make_processor()
         await self.reply(gate)
-        b.speak.assert_awaited_once()
+        b.speak.assert_awaited_once_with(device_id="office-id", text="Hello from Jarvis")
         emitted = [call.args[0] for call in gate.push_frame.await_args_list]
         self.assertFalse(any(isinstance(f, TTSAudioRawFrame) for f in emitted))
         self.assertTrue(any(isinstance(f, TTSTextFrame) for f in emitted))
@@ -89,9 +90,13 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_interruption_drops_buffered_reply(self):
         gate, b = await self.make_processor()
-        for frame in (LLMFullResponseStartFrame(), TTSTextFrame("Stale"), audio()):
+        for frame in (
+            LLMFullResponseStartFrame(),
+            TTSTextFrame("stale", aggregated_by=AggregationType.SENTENCE),
+            audio(),
+        ):
             await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
-        await gate.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)
+        await gate.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
         self.assertFalse(gate._buffering)
         self.assertEqual(gate._held, [])
         b.speak.assert_not_awaited()
@@ -99,8 +104,45 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
     async def test_audio_cap_releases_audio_without_casatunes(self):
         gate, b = await self.make_processor()
         gate.max_audio_bytes = 2
-        for frame in (LLMFullResponseStartFrame(), TTSTextFrame("Long"), audio(), LLMFullResponseEndFrame()):
+        for frame in (
+            LLMFullResponseStartFrame(),
+            TTSTextFrame("long", aggregated_by=AggregationType.SENTENCE),
+            audio(),
+            LLMFullResponseEndFrame(),
+        ):
             await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
         b.speak.assert_not_awaited()
         emitted = [call.args[0] for call in gate.push_frame.await_args_list]
         self.assertTrue(any(isinstance(f, TTSAudioRawFrame) for f in emitted))
+
+    async def test_watchdog_releases_buffered_pcm(self):
+        gate, b = await self.make_processor()
+        gate.max_hold_seconds = 0
+        emitted = []
+
+        async def push(frame, direction):
+            await asyncio.sleep(0)
+            emitted.append(frame)
+
+        gate.push_frame.side_effect = push
+        start, pcm = LLMFullResponseStartFrame(), audio()
+        for frame in (start, pcm):
+            await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
+        await gate._watchdog
+        end = LLMFullResponseEndFrame()
+        await gate.process_frame(end, FrameDirection.DOWNSTREAM)
+        self.assertEqual(emitted, [start, pcm, end])
+        b.speak.assert_not_awaited()
+
+    async def test_text_only_reply_does_not_trigger_audio(self):
+        gate, b = await self.make_processor()
+        frames = [
+            LLMFullResponseStartFrame(),
+            TTSTextFrame("text only", aggregated_by=AggregationType.SENTENCE),
+            LLMFullResponseEndFrame(),
+        ]
+        for frame in frames:
+            await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
+        await gate._delivery
+        b.speak.assert_not_awaited()
+        self.assertEqual([call.args[0] for call in gate.push_frame.await_args_list], frames)

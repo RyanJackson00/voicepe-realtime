@@ -19,12 +19,12 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     OutputAudioRawFrame,
     StartFrame,
-    StartInterruptionFrame,
     TTSTextFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -70,9 +70,9 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         self._delivery: Optional[asyncio.Task] = None
 
     def _cancel_watchdog(self):
-        if self._watchdog is not None:
+        if self._watchdog is not None and self._watchdog is not asyncio.current_task():
             self._watchdog.cancel()
-            self._watchdog = None
+        self._watchdog = None
 
     def _reset(self):
         self._generation += 1
@@ -118,6 +118,7 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         ).strip()
         eligible = (
             spoken and len(spoken) <= 1500
+            and any(isinstance(frame, OutputAudioRawFrame) and frame.audio for frame in frames)
             and not _CONFIRMATION_RE.search(spoken)
             and self.bridge.eligible(self.device_id)
         )
@@ -142,7 +143,7 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         if not self.bridge.eligible(self.device_id):
             await self.push_frame(frame, direction)
             return
-        if isinstance(frame, (StartInterruptionFrame, CancelFrame, StartFrame, EndFrame)):
+        if isinstance(frame, (InterruptionFrame, CancelFrame, StartFrame, EndFrame)):
             self._reset()
             await self.push_frame(frame, direction)
             return

@@ -90,6 +90,8 @@ Two places hold configuration:
 | `announce_token` | *(empty)* | Bearer token for the announce endpoint. The add-on runs on the host network, so the token is the lock — generate a long random one. |
 | `devices` | *(empty)* | Several Voice PEs on one add-on: per-device name, port, announce port and settings. See [Per-device settings](getting-started.md#per-device-settings). |
 | `mcp_persistent_session` | *(hidden)* `true` | Reuse one Home Assistant tool session instead of opening a new one per command. |
+| `casatunes_bridge_enabled` | `false` | Experimental Office-only text-to-speech routing through Home Assistant. See the [CasaTunes bridge](casatunes-bridge.md) for the service contract and test procedure. |
+| `casatunes_office_device_id` | *(empty)* | Exact websocket device ID of the Office satellite. An empty ID leaves CasaTunes routing disabled. |
 
 ## ⚙️ Advanced
 

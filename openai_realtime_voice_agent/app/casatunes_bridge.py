@@ -8,12 +8,11 @@ the satellite audio fallback.  No audio recordings or API tokens are logged.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import aiohttp
 
 _LOG = logging.getLogger(__name__)
 
@@ -65,24 +64,33 @@ class CasaTunesBridge:
         if not self.eligible(device_id) or not text.strip():
             return False
         try:
-            return await asyncio.to_thread(self._post, text.strip())
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            return await self._post(text.strip())
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
             _LOG.warning("CasaTunes response bridge unavailable (%s)", type(exc).__name__)
             return False
 
-    def _post(self, text: str) -> bool:
+    async def _post(self, text: str) -> bool:
         c = self.config
         url = (
             c.ha_url.rstrip("/") + "/api/services/"
             + c.service_domain + "/" + c.service_name
         )
-        payload = json.dumps({"message": text}).encode("utf-8")
-        request = Request(
-            url, data=payload, method="POST",
-            headers={
-                "Authorization": "Bearer " + c.ha_token,
-                "Content-Type": "application/json",
-            },
-        )
-        with urlopen(request, timeout=c.timeout_seconds) as response:
-            return 200 <= response.status < 300
+        timeout = aiohttp.ClientTimeout(total=c.timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                url,
+                params={"return_response": ""},
+                json={"message": text},
+                headers={"Authorization": "Bearer " + c.ha_token},
+                allow_redirects=False,
+            ) as response:
+                if not 200 <= response.status < 300:
+                    return False
+                result = await response.json()
+                service_response = (
+                    result.get("service_response") if isinstance(result, dict) else None
+                )
+                status = (
+                    service_response.get("status") if isinstance(service_response, dict) else None
+                )
+                return isinstance(status, int) and 200 <= status < 300

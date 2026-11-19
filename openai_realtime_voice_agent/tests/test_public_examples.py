@@ -40,6 +40,7 @@ SPEAKER_FIXTURE_NAMES = frozenset({
 # entry to be in use somewhere in the scanned sources, so a real name cannot be
 # parked here ahead of the fixture that would spend it.
 NON_NAME_LITERALS = {
+    'Realtime': 'name of the OpenAI voice runtime (app/casatunes_realtime.py)',
     'Door': 'fictional device name in the router-structure fixtures (tests/test_router_structure.py)',
     'Gate': 'fictional device name in the router-structure fixtures (tests/test_router_structure.py)',
     'Hall': 'fictional room in the router-structure fixtures (tests/test_router_structure.py)',

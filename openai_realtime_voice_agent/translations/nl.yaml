@@ -172,6 +172,17 @@ configuration:
       Leeg laten (aanbevolen): de add-on gebruikt zijn eigen ingebouwde
       toestemming. Maak alleen een long-lived token aan (je HA-profiel →
       Beveiliging) als het log bij het opstarten een 401/403-fout toont.
+  casatunes_bridge_enabled:
+    name: "🏠 Home Assistant · CasaTunes-antwoorden voor kantoor"
+    description: >-
+      Experimenteel. Stuurt geschikte, voltooide antwoorden van het ingestelde
+      kantoorapparaat naar het CasaTunes-spraakcommando. Laat uit totdat een
+      afspeeltest op kantoor is goedgekeurd.
+  casatunes_office_device_id:
+    name: "🏠 Home Assistant · CasaTunes-apparaat-ID voor kantoor"
+    description: >-
+      Exacte websocket-apparaat-ID van de satelliet op kantoor. Laat leeg om
+      alle antwoorden via de satellietluidsprekers af te spelen.
   mcp_tool_allowlist:
     name: "🏠 Home Assistant · Tool-allowlist"
     description: >-
