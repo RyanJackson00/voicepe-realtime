@@ -714,6 +714,7 @@ class WebSocketHandler:
         service.on_audible_output = gate.note_audible_output
         service.on_backend_activity = gate.note_backend_activity
         service.on_reply_finished = gate.note_reply_finished
+        service.on_external_reply = gate.note_turn_resolved
         if hasattr(service, "on_task_reopen"):
             # A background task's result arriving after the session closed
             # may open one short session to speak it: through this gate, so
@@ -927,8 +928,12 @@ class WebSocketHandler:
         # environment opt-in and exact Office device ID are both configured.
         # Position after the assistant transcript tap/aggregator and before
         # phase/transport so buffered PCM cannot reach the satellite early.
-        if isinstance(openai_service, OpenAIRealtimeLLMService):
-            pipeline_components.append(CasaTunesRealtimeOutput(device_id=client_id))
+        if isinstance(openai_service, OpenAIRealtimeLLMService) and connection.authenticated:
+            bridge_output = CasaTunesRealtimeOutput(device_id=client_id)
+            if bridge_output.bridge.eligible(client_id):
+                openai_service.casatunes_completion_marker = True
+                connection.casatunes_output = bridge_output
+                pipeline_components.append(bridge_output)
 
         pipeline_components.append(TimelineMetricsTap(lambda: connection.turn_timeline))
 
@@ -1117,6 +1122,9 @@ class WebSocketHandler:
                 await owner.acknowledge_interrupt(info.get("seq"))
 
         async def _handle_device_interrupt():
+            bridge_output = getattr(connection, "casatunes_output", None)
+            if bridge_output is not None:
+                bridge_output.interrupt()
             if hold is not None:
                 hold.disarm("stop")  # the device closed its mic on the stop
             turn = timeline.current if timeline is not None else None
@@ -1968,6 +1976,7 @@ class WebSocketHandler:
         serializer = RawAudioSerializer(device_id)
         connection = DeviceConnection(
             device_id=device_id, websocket=websocket, serializer=serializer,
+            authenticated=decision.authenticated,
             # Resolved once here; every per-device setting reads this.
             profile=self.device_directory.get(device_id),
         )

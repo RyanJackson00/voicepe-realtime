@@ -72,7 +72,8 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
 from pipecat.utils.time import time_now_iso8601
 
-from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig
+from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, DeliveryResult
+from app.phase_emitter import ExternalReplyFrame
 from app.live_audio import WITHHELD_REASONS, LiveOutputAudio, OutputAudioCapture, OutputChunk
 from app import speaker_owner as so
 from app.speaker_owner_pipeline import SpeakerUtteranceEndFrame, label as label_for_owner
@@ -941,6 +942,7 @@ class OpenAILiveLLMService(GuardedToolsMixin, LLMService):
         # reconnect, lose — the function call behind a queue of audio frames.
         # Disabled by default; never replaces device audio for other rooms.
         self.casatunes_bridge = CasaTunesBridge(CasaTunesBridgeConfig.from_env())
+        self.casatunes_device_authenticated = False
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._audio_task: Optional[asyncio.Task] = None
         # False until session.started proves the device-safe PCM format. An
@@ -1208,6 +1210,7 @@ class OpenAILiveLLMService(GuardedToolsMixin, LLMService):
         self.on_audible_output: Optional[Callable[[], None]] = None
         self.on_backend_activity: Optional[Callable[[], None]] = None
         self.on_reply_finished: Optional[Callable[[], None]] = None
+        self.on_external_reply: Optional[Callable[[], None]] = None
 
         self._register_event_handler("on_session_started")
         self._register_event_handler("on_delegation_created")
@@ -2797,7 +2800,8 @@ class OpenAILiveLLMService(GuardedToolsMixin, LLMService):
         """
         return bool(
             self.stream_replies
-            and not self.casatunes_bridge.eligible(self.device_id)
+            and not (self.casatunes_device_authenticated
+                     and self.casatunes_bridge.eligible(self.device_id))
             and self._requires_backend_for_reply
             and self._backend_answer_ready
             and not self._confirmation_prompts_pending
@@ -2905,36 +2909,29 @@ class OpenAILiveLLMService(GuardedToolsMixin, LLMService):
         await self._speech_segment_started()
         if self._suppress_output or not admission.can_deliver(reply) or self._reply_busy():
             return
-        # Office-only TTS bridge. LiveReplyAdmission already buffers complete,
-        # approved replies before any PCM reaches the satellite. A successful
-        # HA REST command suppresses ONLY this reply's buffered satellite PCM.
-        # Confirmation questions stay on the device: a REST 2xx is command
-        # acceptance, not proof that CasaTunes played the question to its end.
+        # Keep confirmations local and only fall back when delivery was rejected.
         if (reply.text.strip() and not reply.prompt_complete
                 and not self._confirmation_prompts_pending
+                and self.casatunes_device_authenticated
                 and self.casatunes_bridge.eligible(self.device_id)):
-            accepted = await self.casatunes_bridge.speak(
+            result = await self.casatunes_bridge.speak(
                 device_id=self.device_id, text=reply.text
             )
-            if accepted:
+            if result is not DeliveryResult.REJECTED:
                 if self._suppress_output or not admission.can_deliver(reply) or self._reply_busy():
-                    logger.warning("CasaTunes accepted a reply overtaken by an interruption; "
-                                   "remote playback cannot yet be cancelled")
+                    logger.warning("CasaTunes reply overtaken by an interruption")
                     return
                 await self.push_frame(LLMFullResponseStartFrame())
                 frame = TTSTextFrame(reply.text, aggregated_by=AggregationType.SENTENCE)
                 frame.includes_inter_frame_spaces = True
                 await self.push_frame(frame)
                 await self.push_frame(LLMFullResponseEndFrame())
-                # Mark the response handled for admission bookkeeping. This
-                # means REST accepted it; NOT that the listener heard it.
+                await self.push_frame(ExternalReplyFrame())
                 admission.mark_enqueued(reply)
                 admission.mark_delivered(reply.generation, reply.segment)
-                self._note(self.on_reply_finished)
-                logger.info("CasaTunes accepted Office TTS response; satellite PCM withheld "
-                            "(ceiling-speaker playback not independently verified)")
+                self._note(self.on_external_reply)
+                logger.info("CasaTunes reply result %s; satellite PCM withheld", result.name.lower())
                 return
-            # HTTP failure/timeout: original buffered PCM remains intact.
             logger.warning("CasaTunes unavailable; using original Office satellite audio")
         # The downstream transport paces queued PCM. Keep the paid session
         # alive through that bounded playout, not merely through enqueue time.

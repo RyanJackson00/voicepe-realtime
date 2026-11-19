@@ -11,6 +11,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from app.background import spawn
+from app.casatunes_realtime import CasaTunesCompletedFrame
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
@@ -372,6 +373,10 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
         except Exception as e:
             logger.debug(f"usage accounting failed: {e!r}")
         silent = self._is_silent_response(evt)
+        if getattr(self, "casatunes_completion_marker", False) and evt.response.status == "completed":
+            action_gate = getattr(self, "action_gate", None)
+            if action_gate is None or not action_gate.has_pending(self.device_id):
+                await self.push_frame(CasaTunesCompletedFrame())
         await super()._handle_evt_response_done(evt)
         if silent:
             callback = getattr(self, "on_silent_response", None)
@@ -1989,6 +1994,7 @@ class Application:
         connection.turn_liveness = TurnLiveness()
         service.turn_liveness = connection.turn_liveness
         service.device_id = connection.device_id
+        service.casatunes_device_authenticated = connection.authenticated
         service.turn_timeline = connection.turn_timeline
         service.action_gate = self.action_gate
         service.spoken_prompts = self.spoken_prompts

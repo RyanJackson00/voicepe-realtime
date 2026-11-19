@@ -11,7 +11,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from app.phase_emitter import PhaseEmitter
+from app.phase_emitter import ExternalReplyFrame, PhaseEmitter
 
 
 class EmitterTestCase(unittest.IsolatedAsyncioTestCase):
@@ -65,6 +65,20 @@ class TestSilentTurn(EmitterTestCase):
 
 
 class TestTurnObservers(EmitterTestCase):
+    async def test_external_reply_closes_thinking_without_opening_follow_up(self):
+        await self.frame(UserStartedSpeakingFrame())
+        await self.frame(UserStoppedSpeakingFrame())
+        await self.frame(ExternalReplyFrame())
+        self.assertEqual(self.phases[-1], ("idle", {"followup": False}))
+        self.assertEqual(self.outcomes, ["external_reply"])
+        self.assertIsNone(self.emitter._watchdog_task)
+
+    async def test_late_external_reply_does_not_close_new_speech(self):
+        await self.frame(UserStartedSpeakingFrame())
+        await self.frame(ExternalReplyFrame())
+        self.assertEqual(self.phases[-1], ("listening", {}))
+        self.assertEqual(self.outcomes, [])
+
     async def test_reply_ends_turn_as_replied_and_bot_callbacks_fire(self):
         started, stopped = [], []
         self.emitter.on_bot_started = lambda: started.append(1)

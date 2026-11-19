@@ -1,20 +1,20 @@
 """Unit tests for the opt-in CasaTunes response delivery adapter."""
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from aiohttp import ClientConnectionError
+from aiohttp import ClientConnectorError, ServerTimeoutError
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig
+from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, DeliveryResult
 
 
 def config(**overrides):
     values = dict(
         enabled=True,
         office_device_id="office-voice",
-        ha_url="http://homeassistant.local:8123",
+        ha_url="https://homeassistant.example",
         ha_token="test-only-token",
     )
     values.update(overrides)
@@ -22,6 +22,30 @@ def config(**overrides):
 
 
 class CasaTunesBridgeTests(unittest.TestCase):
+    def test_custom_url_never_inherits_supervisor_token(self):
+        with patch.dict("os.environ", {
+            "CASATUNES_HA_URL": "https://homeassistant.example",
+            "SUPERVISOR_TOKEN": "fixture-token",
+        }, clear=True):
+            self.assertEqual(CasaTunesBridgeConfig.from_env().ha_token, "")
+        with patch.dict("os.environ", {"SUPERVISOR_TOKEN": "fixture-token"}, clear=True):
+            self.assertEqual(CasaTunesBridgeConfig.from_env().ha_token, "fixture-token")
+
+    def test_endpoint_rejects_unsafe_urls(self):
+        for url in (
+            "http://homeassistant.example", "http://supervisor/other",
+            "https://user@localhost", "https://homeassistant.example/?next=x",
+            "https://homeassistant.example:65536", "https://homeassistant.example/#fragment",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(CasaTunesBridge(config(ha_url=url)).eligible("office-voice"))
+
+    def test_response_timeout_is_not_a_definitive_rejection(self):
+        bridge = CasaTunesBridge(config())
+        with patch.object(bridge, "_post", side_effect=ServerTimeoutError()):
+            self.assertIs(asyncio.run(bridge.speak(device_id="office-voice", text="hello")),
+                          DeliveryResult.UNCERTAIN)
+
     def test_disabled_by_default(self):
         self.assertFalse(CasaTunesBridge(CasaTunesBridgeConfig()).eligible("office-voice"))
 
@@ -37,19 +61,22 @@ class CasaTunesBridgeTests(unittest.TestCase):
 
     def test_eligible_delivery(self):
         bridge = CasaTunesBridge(config())
-        with patch.object(bridge, "_post", return_value=True) as post:
-            self.assertTrue(asyncio.run(bridge.speak(device_id="office-voice", text="  hello  ")))
+        with patch.object(bridge, "_post", return_value=DeliveryResult.ACCEPTED) as post:
+            self.assertIs(asyncio.run(bridge.speak(device_id="office-voice", text="  hello  ")),
+                          DeliveryResult.ACCEPTED)
             post.assert_awaited_once_with("hello")
 
-    def test_failure_returns_false_for_satellite_fallback(self):
+    def test_connection_failure_permits_satellite_fallback(self):
         bridge = CasaTunesBridge(config())
-        with patch.object(bridge, "_post", side_effect=ClientConnectionError("unreachable")):
-            self.assertFalse(asyncio.run(bridge.speak(device_id="office-voice", text="hello")))
+        with patch.object(bridge, "_post", side_effect=ClientConnectorError(MagicMock(), OSError())):
+            self.assertIs(asyncio.run(bridge.speak(device_id="office-voice", text="hello")),
+                          DeliveryResult.REJECTED)
 
     def test_living_room_never_posts(self):
         bridge = CasaTunesBridge(config())
         with patch.object(bridge, "_post") as post:
-            self.assertFalse(asyncio.run(bridge.speak(device_id="living-room", text="hello")))
+            self.assertIs(asyncio.run(bridge.speak(device_id="living-room", text="hello")),
+                          DeliveryResult.REJECTED)
             post.assert_not_called()
 
 
@@ -81,15 +108,20 @@ class CasaTunesHTTPTests(unittest.IsolatedAsyncioTestCase):
         app.router.add_post("/redirect-target", redirect_target)
         async with TestServer(app) as server:
             bridge = CasaTunesBridge(config(ha_url=str(server.make_url("/core"))))
-            self.assertTrue(await bridge.speak(device_id="office-voice", text="test reply"))
+            self.assertIs(await bridge.speak(device_id="office-voice", text="test reply"),
+                          DeliveryResult.ACCEPTED)
             upstream_status = 503
-            self.assertFalse(await bridge.speak(device_id="office-voice", text="test reply"))
+            self.assertIs(await bridge.speak(device_id="office-voice", text="test reply"),
+                          DeliveryResult.REJECTED)
             upstream_status = None
-            self.assertFalse(await bridge.speak(device_id="office-voice", text="test reply"))
+            self.assertIs(await bridge.speak(device_id="office-voice", text="test reply"),
+                          DeliveryResult.UNCERTAIN)
             status = 307
-            self.assertFalse(await bridge.speak(device_id="office-voice", text="test reply"))
+            self.assertIs(await bridge.speak(device_id="office-voice", text="test reply"),
+                          DeliveryResult.REJECTED)
             status = 503
-            self.assertFalse(await bridge.speak(device_id="office-voice", text="test reply"))
+            self.assertIs(await bridge.speak(device_id="office-voice", text="test reply"),
+                          DeliveryResult.UNCERTAIN)
         self.assertEqual(
             received, [("Bearer test-only-token", {"message": "test reply"}, True)] * 5,
         )

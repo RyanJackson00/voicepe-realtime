@@ -4,19 +4,20 @@ The bridge is experimental and disabled by default. It routes eligible completed
 
 ## Configuration
 
-In the add-on's Configuration tab, `casatunes_bridge_enabled` defaults to `false` and `casatunes_office_device_id` defaults to empty. The device ID must match the Office client's actual websocket device ID.
+In the add-on's Configuration tab, `casatunes_bridge_enabled` defaults to `false` and `casatunes_office_device_id` defaults to empty. Routing requires both the exact websocket device ID and a token-authenticated connection. A shared device token establishes membership in the trusted set of satellites.
 
 The add-on uses its existing `SUPERVISOR_TOKEN` and `http://supervisor/core` by default. It posts `{"message":"..."}` to `/api/services/rest_command/casatunes_speak?return_response` through that proxy. Confirm the Home Assistant command's template accepts `message` and targets the Office zone before enabling the add-on option.
 
-For standalone development, `CASATUNES_BRIDGE_ENABLED` and `CASATUNES_OFFICE_DEVICE_ID` provide the same options. `CASATUNES_HA_URL` and `CASATUNES_HA_TOKEN` allow a separate development Home Assistant endpoint and credential. Keep tokens out of Git.
+For standalone development, `CASATUNES_BRIDGE_ENABLED` and `CASATUNES_OFFICE_DEVICE_ID` provide the same options. A custom `CASATUNES_HA_URL` requires its own `CASATUNES_HA_TOKEN` and HTTPS, with HTTP allowed on loopback for tests. The Supervisor token stays scoped to the built-in Core proxy. Keep tokens out of Git.
 
 ## Reply handling
 
 - GPT-Live uses the existing `LiveReplyAdmission` buffer. The bridge leaves confirmation prompts on the satellite and disables streaming delivery for the eligible device so its original audio is available for fallback.
-- Pipecat Realtime buffers the original audio and transcript through the response-end frame. Confirmation-like replies and text-only responses stay on the original path. An interruption discards held frames. The hold timeout and audio limit release the original frames.
-- Satellite PCM is withheld only when both Home Assistant and the REST command's returned CasaTunes status indicate HTTP success. Request failures release the original PCM when the reply is still current. The bridge does not follow redirects.
+- Pipecat Realtime buffers audio and transcript until the server confirms a completed response. Pending confirmations, confirmation-like replies, and text-only responses stay local. A device stop or barge-in invalidates held frames and any outstanding local request. The hold timeout and audio limit release the original frames in order.
+- Successful nested CasaTunes status suppresses satellite PCM. A definitive rejection releases PCM when the reply is still current. After an ambiguous timeout, malformed response, or proxy error, the bridge skips both retry and PCM replay because the original announcement may already be playing.
+- After external delivery or an uncertain outcome, the satellite returns to idle without opening follow-up listening. A new wake starts the next turn.
 
-The returned status confirms the endpoint accepted the request. Audible playback, music resumption, and cancellation after dispatch still require hardware validation. The Realtime confirmation filter is heuristic, and remote playback does not provide the same timing signals as the satellite.
+The returned status confirms endpoint acceptance. Audible playback, music resumption, and cancellation after dispatch still require hardware validation. Local interruption cannot revoke an already dispatched announcement.
 
 ## Office canary
 

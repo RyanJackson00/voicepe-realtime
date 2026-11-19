@@ -2,11 +2,12 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
 from app.main import SafeRealtimeLLMService
+from app.casatunes_realtime import CasaTunesCompletedFrame
 from app.realtime_observer import ObservedSocket, extract_event_type
 from app.turn_timeline import TurnTimeline
 
@@ -111,6 +112,32 @@ def response_done(status="completed", rid="r9", output=()):
     usage = SimpleNamespace(input_token_details=None, output_token_details=None,
                             input_tokens=1, output_tokens=0, total_tokens=1)
     return SimpleNamespace(response=SimpleNamespace(id=rid, status=status, output=list(output), usage=usage))
+
+
+class TestCasaTunesCompletion(unittest.IsolatedAsyncioTestCase):
+    async def test_only_completed_responses_without_confirmation_are_marked(self):
+        for status, pending, expected in (
+            ("completed", False, True), ("completed", True, False),
+            ("incomplete", False, False), ("cancelled", False, False),
+        ):
+            with self.subTest(status=status, pending=pending):
+                service = make_service()
+                service.device_id = "office-id"
+                service.casatunes_completion_marker = True
+                service.action_gate = Mock()
+                service.action_gate.has_pending.return_value = pending
+                service.push_frame = AsyncMock()
+
+                async def finish(event):
+                    # Pipecat emits the end bracket in this callback.
+                    self.assertEqual(service.push_frame.await_count, int(expected))
+
+                with patch.object(OpenAIRealtimeLLMService, "_handle_evt_response_done",
+                                  new=AsyncMock(side_effect=finish)):
+                    await service._handle_evt_response_done(response_done(status=status))
+                if expected:
+                    self.assertIsInstance(service.push_frame.await_args.args[0],
+                                          CasaTunesCompletedFrame)
 
 
 class TestSilentResponses(unittest.IsolatedAsyncioTestCase):

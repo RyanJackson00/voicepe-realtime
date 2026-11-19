@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from typing import Optional
 
 from pipecat.frames.frames import (
     CancelFrame,
+    ControlFrame,
     EndFrame,
     Frame,
     InterruptionFrame,
@@ -25,11 +27,16 @@ from pipecat.frames.frames import (
     LLMTextFrame,
     OutputAudioRawFrame,
     StartFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
     TTSTextFrame,
+    UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig
+from app.background import spawn
+from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, DeliveryResult
+from app.phase_emitter import ExternalReplyFrame
 
 _LOG = logging.getLogger(__name__)
 # A cautious initial canary: don't route confirmations or security actions
@@ -39,6 +46,13 @@ _CONFIRMATION_RE = re.compile(
     r"unlock|lock|garage|gate|alarm|disarm|arm the|open the door)\b",
     re.IGNORECASE,
 )
+_SPEECH_FRAMES = (TTSTextFrame, LLMTextFrame, OutputAudioRawFrame, TTSStartedFrame, TTSStoppedFrame)
+_SATELLITE_AUDIO = (OutputAudioRawFrame, TTSStartedFrame, TTSStoppedFrame)
+
+
+@dataclass
+class CasaTunesCompletedFrame(ControlFrame):
+    """The server completed a response that has no pending confirmation."""
 
 
 class CasaTunesRealtimeOutput(FrameProcessor):
@@ -63,8 +77,11 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         self.max_hold_seconds = max_hold_seconds
         self._buffering = False
         self._bypass_until_end = False
+        self._drop_until_start = False
+        self._completed = False
         self._held: list[Frame] = []
         self._audio_bytes = 0
+        self._frame_lock = asyncio.Lock()
         self._generation = 0
         self._watchdog: Optional[asyncio.Task] = None
         self._delivery: Optional[asyncio.Task] = None
@@ -84,6 +101,15 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         self._audio_bytes = 0
         self._buffering = False
         self._bypass_until_end = False
+        self._completed = False
+
+    def interrupt(self):
+        self._reset()
+        self._drop_until_start = True
+
+    async def cleanup(self):
+        self._reset()
+        await super().cleanup()
 
     async def _release(self, frames: list[Frame], generation: int, direction: FrameDirection):
         for frame in frames:
@@ -104,34 +130,33 @@ class CasaTunesRealtimeOutput(FrameProcessor):
 
     def _arm_watchdog(self, generation: int, direction: FrameDirection):
         async def watch():
-            try:
-                await asyncio.sleep(self.max_hold_seconds)
+            await asyncio.sleep(self.max_hold_seconds)
+            async with self._frame_lock:
                 await self._give_up(generation, direction)
-            except asyncio.CancelledError:
-                return
-        self._watchdog = asyncio.create_task(watch())
+        self._watchdog = spawn(watch(), "casatunes-hold")
 
-    async def _deliver(self, frames: list[Frame], generation: int, direction: FrameDirection):
+    async def _deliver(self, frames: list[Frame], completed: bool, generation: int,
+                       direction: FrameDirection):
         spoken = "".join(
             frame.text for frame in frames
             if isinstance(frame, (TTSTextFrame, LLMTextFrame)) and frame.text
         ).strip()
         eligible = (
-            spoken and len(spoken) <= 1500
+            completed and spoken and len(spoken) <= 1500
             and any(isinstance(frame, OutputAudioRawFrame) and frame.audio for frame in frames)
             and not _CONFIRMATION_RE.search(spoken)
             and self.bridge.eligible(self.device_id)
         )
-        accepted = False
+        result = DeliveryResult.REJECTED
         if eligible:
-            accepted = await self.bridge.speak(device_id=self.device_id, text=spoken)
+            result = await self.bridge.speak(device_id=self.device_id, text=spoken)
         if generation != self._generation:
             return
-        if accepted:
-            # Retain response framing and transcript for context / logging.
-            # Drop *only* the audio that would duplicate the CasaTunes speech.
-            outgoing = [f for f in frames if not isinstance(f, OutputAudioRawFrame)]
-            _LOG.info("CasaTunes accepted Realtime reply; satellite PCM withheld")
+        if result is not DeliveryResult.REJECTED:
+            # Preserve transcript framing without claiming local playout.
+            outgoing = [f for f in frames if not isinstance(f, _SATELLITE_AUDIO)]
+            outgoing.append(ExternalReplyFrame())
+            _LOG.info("CasaTunes Realtime result %s; satellite PCM withheld", result.name.lower())
         else:
             outgoing = frames
             if eligible:
@@ -139,22 +164,36 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         await self._release(outgoing, generation, direction)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-        if not self.bridge.eligible(self.device_id):
-            await self.push_frame(frame, direction)
-            return
-        if isinstance(frame, (InterruptionFrame, CancelFrame, StartFrame, EndFrame)):
+        enabled = self.bridge.eligible(self.device_id)
+        if enabled and isinstance(frame, (InterruptionFrame, UserStartedSpeakingFrame)):
+            self.interrupt()
+        elif enabled and isinstance(frame, (CancelFrame, StartFrame, EndFrame)):
             self._reset()
+            self._drop_until_start = False
+        await super().process_frame(frame, direction)
+        if not enabled or direction != FrameDirection.DOWNSTREAM or not isinstance(
+            frame, (*_SPEECH_FRAMES, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
+                    CasaTunesCompletedFrame)
+        ):
             await self.push_frame(frame, direction)
             return
-        if direction != FrameDirection.DOWNSTREAM:
-            await self.push_frame(frame, direction)
-            return
+        generation = self._generation
+        async with self._frame_lock:
+            if generation == self._generation:
+                await self._process_reply_frame(frame, direction)
+
+    async def _process_reply_frame(self, frame: Frame, direction: FrameDirection):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._reset()
+            self._drop_until_start = False
             self._buffering = True
             self._held = [frame]
             self._arm_watchdog(self._generation, direction)
+            return
+        if self._drop_until_start:
+            return
+        if isinstance(frame, CasaTunesCompletedFrame):
+            self._completed = self._buffering
             return
         if self._bypass_until_end:
             if isinstance(frame, LLMFullResponseEndFrame):
@@ -164,19 +203,16 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         if not self._buffering:
             await self.push_frame(frame, direction)
             return
-        if isinstance(frame, (TTSTextFrame, LLMTextFrame, OutputAudioRawFrame, LLMFullResponseEndFrame)):
-            self._held.append(frame)
-            if isinstance(frame, OutputAudioRawFrame):
-                self._audio_bytes += len(frame.audio)
-                if self._audio_bytes > self.max_audio_bytes:
-                    await self._give_up(self._generation, direction)
-                    return
-            if isinstance(frame, LLMFullResponseEndFrame):
-                self._buffering = False
-                self._cancel_watchdog()
-                frames, self._held = self._held, []
-                gen = self._generation
-                self._delivery = asyncio.create_task(self._deliver(frames, gen, direction))
-            return
-        # Control and metrics frames must not be delayed by the speech hold.
-        await self.push_frame(frame, direction)
+        self._held.append(frame)
+        if isinstance(frame, OutputAudioRawFrame):
+            self._audio_bytes += len(frame.audio)
+            if self._audio_bytes > self.max_audio_bytes:
+                await self._give_up(self._generation, direction)
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self._buffering = False
+            self._cancel_watchdog()
+            frames, self._held = self._held, []
+            self._delivery = spawn(
+                self._deliver(frames, self._completed, self._generation, direction),
+                "casatunes-delivery",
+            )
