@@ -1,11 +1,13 @@
 """Unit tests for opt-in Pipecat Realtime CasaTunes response buffering."""
 import asyncio
+import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pipecat.frames.frames import (
     AggregationType,
     InterruptionFrame,
+    LLMContextFrame,
     LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,
     TTSAudioRawFrame,
@@ -15,7 +17,15 @@ from pipecat.processors.frame_processor import FrameDirection
 
 from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, DeliveryResult
 from app.casatunes_realtime import CasaTunesCompletedFrame, CasaTunesRealtimeOutput
-from app.phase_emitter import ExternalReplyFrame
+from app.device_registry import DeviceConnection
+from app.phase_emitter import ExternalReplyFrame, TurnLiveness
+from app.raw_audio_serializer import RawAudioSerializer
+from app.session_manager import SessionManager
+from app.turn_timeline import TurnTimeline
+from app.wake_events import CaptureConfig, WakeEventStore
+from app.websocket_handler import WebSocketHandler
+from tests.live_harness import Tap
+from tests.test_handler_wiring import ForwardingService, RunnableTransport
 
 
 def bridge(office="office-id", enabled=True):
@@ -32,6 +42,58 @@ def bridge(office="office-id", enabled=True):
 
 def audio():
     return TTSAudioRawFrame(audio=b"\x00\x01" * 10, sample_rate=24000, num_channels=1)
+
+
+class RealtimeCasaTunesPipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def run_reply(self, result):
+        # Exercise build_pipeline with Pipecat's real assistant aggregator.
+        # It consumes the response brackets and text after updating context.
+        device_id = "office-id"
+        backend = bridge()
+        backend.speak.return_value = result
+        sink = Tap()
+        transport = RunnableTransport()
+        transport._output = sink
+        connection = DeviceConnection(
+            device_id=device_id, websocket=object(), authenticated=True,
+            serializer=RawAudioSerializer(device_id), transport=transport,
+            turn_timeline=TurnTimeline(device_id), turn_liveness=TurnLiveness(),
+            openai_service=ForwardingService(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            store = WakeEventStore(CaptureConfig(mode="off", probe_dir=directory), instance="w")
+            handler = WebSocketHandler(session_manager=SessionManager(), wake_events=store)
+            with patch("app.websocket_handler.OpenAIRealtimeLLMService", ForwardingService), \
+                 patch("app.casatunes_realtime.CasaTunesBridge", return_value=backend):
+                _, runner, task = handler.build_pipeline(connection)
+            worker = asyncio.create_task(runner.run(task))
+            try:
+                await asyncio.wait_for(sink.started.wait(), 3)
+                pcm = audio()
+                await task.queue_frames([
+                    InterruptionFrame(),
+                    LLMFullResponseStartFrame(),
+                    TTSTextFrame("fixture reply", aggregated_by=AggregationType.SENTENCE),
+                    pcm,
+                    CasaTunesCompletedFrame(),
+                    LLMFullResponseEndFrame(),
+                ])
+                await sink.wait_for(LLMContextFrame, timeout=3)
+                backend.speak.assert_awaited_once_with(device_id=device_id, text="fixture reply")
+                messages = sink.of(LLMContextFrame)[-1].context.get_messages()
+                self.assertIn({"role": "assistant", "content": "fixture reply"}, messages)
+                self.assertEqual(sink.of(TTSAudioRawFrame),
+                                 [pcm] if result is DeliveryResult.REJECTED else [])
+            finally:
+                await connection.phase_emitter.close()
+                await task.cancel()
+                await asyncio.wait_for(worker, 5)
+
+    async def test_accepted_reply_retains_context_without_satellite_audio(self):
+        await self.run_reply(DeliveryResult.ACCEPTED)
+
+    async def test_rejected_reply_retains_context_and_satellite_audio(self):
+        await self.run_reply(DeliveryResult.REJECTED)
 
 
 class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):

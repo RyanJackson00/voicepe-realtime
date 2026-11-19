@@ -58,8 +58,8 @@ class CasaTunesCompletedFrame(ControlFrame):
 class CasaTunesRealtimeOutput(FrameProcessor):
     """Hold a complete Realtime reply; CasaTunes on REST accept, PCM on failure.
 
-    This processor is inserted *after* the model and assistant transcript tap,
-    *before* phase emission and transport output. Its device filter uses the
+    This processor follows the model and assistant transcript tap and precedes
+    context aggregation, phase emission and transport output. Its filter uses the
     actual websocket client's device ID, never a guessed room label.
     """
 

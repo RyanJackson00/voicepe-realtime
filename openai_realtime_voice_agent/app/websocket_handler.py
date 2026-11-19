@@ -909,25 +909,18 @@ class WebSocketHandler:
         # opposite sides of the service (see transcript_logger.py): "user" before
         # the LLM, "assistant" after it.
         if context_aggregator:
-            pipeline_components.extend([
-                context_aggregator.user(),
-                TranscriptLogger(capture="user"),
-                openai_service,
-                TranscriptLogger(capture="assistant"),
-                context_aggregator.assistant(),
-            ])
-        else:
-            pipeline_components.extend([
-                TranscriptLogger(capture="user"),
-                openai_service,
-                TranscriptLogger(capture="assistant"),
-            ])
+            pipeline_components.append(context_aggregator.user())
+        pipeline_components.extend([
+            TranscriptLogger(capture="user"),
+            openai_service,
+            TranscriptLogger(capture="assistant"),
+        ])
 
         # gpt-realtime-2 (the currently installed model) uses Pipecat, not
         # GPT-Live's LiveReplyAdmission. The bridge is a no-op unless its
         # environment opt-in and exact Office device ID are both configured.
-        # Position after the assistant transcript tap/aggregator and before
-        # phase/transport so buffered PCM cannot reach the satellite early.
+        # Observe the reply before the assistant aggregator consumes the
+        # response boundary and text frames. Keep the transcript tap upstream.
         if isinstance(openai_service, OpenAIRealtimeLLMService) and connection.authenticated:
             bridge_output = CasaTunesRealtimeOutput(device_id=client_id)
             if bridge_output.bridge.eligible(client_id):
@@ -935,6 +928,8 @@ class WebSocketHandler:
                 connection.casatunes_output = bridge_output
                 pipeline_components.append(bridge_output)
 
+        if context_aggregator:
+            pipeline_components.append(context_aggregator.assistant())
         pipeline_components.append(TimelineMetricsTap(lambda: connection.turn_timeline))
 
         # Emit va_client phase messages (listening/thinking/replying/idle) to
