@@ -1,6 +1,6 @@
 # CasaTunes voice bridge — development plan
 
-Status: **prototype adapter only, not wired to live audio**. Do not deploy as-is expecting speech redirection.
+Status: **experimental GPT-Live response wiring committed, not production tested**. Still disabled by default. Do not deploy to the running add-on without a controlled Office-only test.
 
 ## Goal
 
@@ -10,7 +10,7 @@ The existing Home Assistant `rest_command.casatunes_speak` announcement was prev
 
 ## First commit: delivery adapter
 
-`app/casatunes_bridge.py` exposes `CasaTunesBridge.speak(device_id, text)`. It returns success/failure and is **disabled by default**. It does not yet connect to the streaming response pipeline.
+`app/casatunes_bridge.py` exposes `CasaTunesBridge.speak(device_id, text)`. It returns success/failure and is **disabled by default**. It is now invoked at the GPT-Live complete-reply admission stage. The ordinary Realtime/Pipecat path remains unchanged.
 
 Optional environment settings:
 
@@ -21,12 +21,18 @@ Optional environment settings:
 
 Never commit credentials to this public fork. Use supervised add-on secrets/environment configuration. The adapter currently posts `{"message":"..."}` to `/api/services/rest_command/casatunes_speak`; verify the actual REST command template uses the `message` parameter.
 
+## Wiring implemented for GPT-Live complete replies
+
+The GPT-Live `LiveReplyAdmission` stage collects verified transcript and PCM before release. When the Office satellite matches the configured ID, ordinary completed answers are sent to the Home Assistant CasaTunes command first. On HTTP success, Jarvis withholds satellite PCM and marks the answer handled. On HTTP failure, the original PCM is played through the satellite. Streaming complete replies are disabled for an eligible Office satellite so they cannot leak audio before the CasaTunes choice. Confirmation prompts are kept on the original satellite path because a REST success does not prove playback. Other device IDs, including Living Room, use the existing pipeline.
+
+**Unresolved risks:** A successful REST response only confirms service acceptance, not actual audible playback or music resume. A user interruption while CasaTunes is processing a REST request cannot stop a remote announcement. The direct Realtime/Pipecat path is not yet bridged. The complete Live path needs hardware-in-the-loop tests before enablement.
+
 ## Integration still required
 
-1. Identify the Office source device in the active websocket session. Do not infer it solely from room names or transcript contents.
-2. **Buffer** response audio for the eligible Office route until there is an eligible *final, accepted* assistant transcript. Audio is streamed before the final text; suppression only after a successful announcement would be too late to prevent duplicate speech.
-3. Do not route premature acknowledgements, suppressed replies, interrupted answers, or incomplete/ineligible responses. The GPT-Live path uses `session.output_transcript.delta`, `session.output_audio.delta`, and specialized admission/gating; the classic Pipecat path has different events.
-4. Send final text to CasaTunes. Only after the Home Assistant service confirms success should the buffered satellite audio be discarded. On any HTTP failure or timeout, release the buffered PCM in order as fallback. Ensure the response does not hang indefinitely.
+1. Verify the exact Office satellite ID exposed by the active websocket session and configure it securely. Do not infer it solely from room names or transcript contents.
+2. Validate on an Office canary that LiveReplyAdmission holds PCM until the finalized transcript and that speech is never duplicated. Its existing buffering is reused rather than recreated.
+3. Validate that premature acknowledgements, suppressed replies, interrupted answers, and incomplete/ineligible responses never route. The GPT-Live path uses `session.output_transcript.delta`, `session.output_audio.delta`, and specialized admission/gating; the classic Pipecat path has different events.
+4. Test service success, timeout, disconnect, stale responses, and server failure against the fallback. Verify the existing admission bookkeeping does not start an incorrect follow-up timer.
 5. New speech/interruption must cancel or supersede pending announcements safely. A successful HA REST response means the command was accepted, **not** that ceiling-speaker playback completed; further CasaTunes state observation is needed to certify user-heard delivery.
 6. Preserve the Living Room route unmodified. Test Office and Living Room concurrently.
 7. Add end-to-end tests for successful delivery, silent replies, rapid follow-ups, barge-in, service failure, missing transcript, and restart/rollback.
