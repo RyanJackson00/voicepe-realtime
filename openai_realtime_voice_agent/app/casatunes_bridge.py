@@ -33,8 +33,12 @@ class CasaTunesBridgeConfig:
         return cls(
             enabled=os.getenv("CASATUNES_BRIDGE_ENABLED", "").lower() in ("1", "true", "yes"),
             office_device_id=os.getenv("CASATUNES_OFFICE_DEVICE_ID", "").strip(),
-            ha_url=os.getenv("CASATUNES_HA_URL", "").strip(),
-            ha_token=os.getenv("CASATUNES_HA_TOKEN", "").strip(),
+            # Home Assistant Apps already receive SUPERVISOR_TOKEN when
+            # homeassistant_api is enabled; use the internal Core proxy and
+            # avoid a second long-lived secret in the public fork.
+            ha_url=os.getenv("CASATUNES_HA_URL", "http://supervisor/core").strip(),
+            ha_token=(os.getenv("CASATUNES_HA_TOKEN", "").strip()
+                      or os.getenv("SUPERVISOR_TOKEN", "").strip()),
         )
 
 
