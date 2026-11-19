@@ -8,6 +8,7 @@ on:
       - main
       - master
       - "remediation/**"
+      - "feature/casatunes-voice-bridge"
   pull_request:
     branches:
       - main
