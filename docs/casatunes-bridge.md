@@ -40,3 +40,7 @@ The GPT-Live `LiveReplyAdmission` stage collects verified transcript and PCM bef
 ## Rollout
 
 Keep the currently installed production add-on unchanged. Implement and test the full integration in this feature branch; review a pull request before changing the installed add-on. Start with Office-only opt-in canary tests and retain an immediate flag-based rollback.
+
+## CI validation
+
+The fork's existing add-on test workflow is enabled for pushes to this feature branch. Keep the pull request in draft until CI is green and Office hardware tests pass.
