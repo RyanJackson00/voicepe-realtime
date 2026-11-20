@@ -63,6 +63,21 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         tool._ha.assert_not_awaited()
 
+    async def test_playing_source_in_other_room_blocks_queue_replacement(self):
+        tool = NativeCasaTunesMusic(CONFIG)
+        tool._room_state = AsyncMock(return_value={
+            "state":"off","attributes":{"source":"Dad","source_list":["Dad","Mom"]}})
+        tool._ha = AsyncMock(return_value=[
+            {"entity_id":"media_player.living", "state":"playing",
+             "attributes":{"source":"Dad","source_list":["Dad","Mom"]}}
+        ])
+        with patch("app.casatunes_native_search.aiohttp.ClientSession"):
+            result = await tool.request_music(ROOM, artist="Greta Van Fleet",
+                                              mode="playNow")
+        self.assertFalse(result["ok"])
+        self.assertEqual(tool._ha.await_count,1)
+        self.assertEqual(tool._ha.await_args.args[1:3],("GET","/api/states"))
+
     def test_tool_is_explicit_about_no_service_guarantee(self):
         description=get_native_music_tool_definition()["description"]
         self.assertIn("NOT guaranteed",description)
