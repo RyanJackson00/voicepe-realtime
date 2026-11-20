@@ -25,7 +25,7 @@ class ConfigTests(unittest.TestCase):
                         ha_token="fake")
         self.assertEqual(cfg.resolve_room("living room"),"media_player.01_living_room")
         self.assertEqual(cfg.resolve_room("Office"),"media_player.04_office")
-        self.assertIsNone(cfg.resolve_room("Gabe"))
+        self.assertIsNone(cfg.resolve_room("garage"))
         self.assertIsNone(cfg.resolve_room("living"))
 
     def test_only_supported_tools_exposed(self):
@@ -38,7 +38,7 @@ class BehaviorTests(unittest.IsolatedAsyncioTestCase):
         tool=CasaTunesMusic(MusicConfig(enabled=True,allowed_rooms=("media_player.office",),
                                          ha_token="fake"))
         with patch("app.casatunes_music_tool.aiohttp.ClientSession") as client:
-            result=await tool.assign_source("media_player.bedroom","Dad")
+            result=await tool.assign_source("media_player.bedroom","Sam")
             client.assert_not_called()
         self.assertFalse(result["ok"])
 
@@ -46,10 +46,10 @@ class BehaviorTests(unittest.IsolatedAsyncioTestCase):
         tool=CasaTunesMusic(MusicConfig(enabled=True,allowed_rooms=("media_player.office",),
                                          ha_token="fake"))
         tool._room_state=AsyncMock(return_value={
-            "state":"off", "attributes":{"source":"Mom","source_list":["Mom","Dad"]}})
+            "state":"off", "attributes":{"source":"Alex","source_list":["Alex","Sam"]}})
         tool._ha=AsyncMock()
         with patch("app.casatunes_music_tool.aiohttp.ClientSession"):
-            result=await tool.assign_source("media_player.office","Unknown")
+            result=await tool.assign_source("media_player.office","unknown")
         self.assertFalse(result["ok"])
         tool._ha.assert_not_awaited()
 
@@ -57,17 +57,17 @@ class BehaviorTests(unittest.IsolatedAsyncioTestCase):
         tool=CasaTunesMusic(MusicConfig(enabled=True,allowed_rooms=("media_player.office",),
                                          ha_token="fake"))
         tool._room_state=AsyncMock(side_effect=[
-            {"state":"on","attributes":{"source":"Mom","source_list":["Mom","Dad"]}},
-            {"state":"on","attributes":{"source":"Dad","source_list":["Mom","Dad"]}},
+            {"state":"on","attributes":{"source":"Alex","source_list":["Alex","Sam"]}},
+            {"state":"on","attributes":{"source":"Sam","source_list":["Alex","Sam"]}},
         ])
         tool._ha=AsyncMock()
         with patch("app.casatunes_music_tool.aiohttp.ClientSession"):
-            result=await tool.assign_source("media_player.office","Dad")
+            result=await tool.assign_source("media_player.office","Sam")
         self.assertTrue(result["ok"])
         self.assertEqual(tool._ha.await_args.args[1:3],
                          ("POST","/api/services/media_player/select_source"))
         self.assertEqual(tool._ha.await_args.args[3],
-                         {"entity_id":"media_player.office","source":"Dad"})
+                         {"entity_id":"media_player.office","source":"Sam"})
 
 
 if __name__ == "__main__":
