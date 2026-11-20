@@ -105,12 +105,14 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
         gate.push_frame = AsyncMock()
         return gate, b
 
-    async def reply(self, gate, text="Hello from Jarvis", *, completed=True, wait=True):
+    async def reply(self, gate, text="Hello from Jarvis", *, completed=True,
+                    started_tool_call=False, wait=True):
+        completion = CasaTunesCompletedFrame(started_tool_call=started_tool_call)
         for frame in (
             LLMFullResponseStartFrame(),
             TTSTextFrame(text, aggregated_by=AggregationType.SENTENCE),
             audio(),
-            *((CasaTunesCompletedFrame(),) if completed else ()),
+            *((completion,) if completed else ()),
             LLMFullResponseEndFrame(),
         ):
             await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
@@ -206,6 +208,29 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
         b.speak.assert_not_awaited()
         emitted = [call.args[0] for call in gate.push_frame.await_args_list]
         self.assertTrue(any(isinstance(f, TTSAudioRawFrame) for f in emitted))
+
+    async def test_clarification_uses_local_audio_and_follow_up(self):
+        for started_tool_call in (False, True):
+            with self.subTest(started_tool_call=started_tool_call):
+                gate, b = await self.make_processor()
+                await self.reply(gate, "Which city should I check?",
+                                 started_tool_call=started_tool_call)
+                b.speak.assert_not_awaited()
+                emitted = [call.args[0] for call in gate.push_frame.await_args_list]
+                self.assertTrue(any(isinstance(f, TTSAudioRawFrame) for f in emitted))
+                self.assertFalse(any(isinstance(f, ExternalReplyFrame) for f in emitted))
+
+    async def test_tool_call_speech_is_silent_until_final_answer(self):
+        gate, b = await self.make_processor()
+        await self.reply(gate, "Let me look that up.", started_tool_call=True)
+        b.speak.assert_not_awaited()
+        emitted = [call.args[0] for call in gate.push_frame.await_args_list]
+        self.assertEqual([type(frame) for frame in emitted],
+                         [LLMFullResponseStartFrame, LLMFullResponseEndFrame])
+
+        await self.reply(gate, "The forecast is clear.")
+        b.speak.assert_awaited_once_with(device_id="office-id", text="The forecast is clear.")
+        self.assertIsInstance(gate.push_frame.await_args.args[0], ExternalReplyFrame)
 
     async def test_interruption_drops_buffered_reply(self):
         gate, b = await self.make_processor()

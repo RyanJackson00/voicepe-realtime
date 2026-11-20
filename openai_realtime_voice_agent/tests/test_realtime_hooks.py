@@ -140,6 +140,18 @@ class TestCasaTunesCompletion(unittest.IsolatedAsyncioTestCase):
                                           CasaTunesCompletedFrame)
 
 
+    async def test_completed_response_marks_output_with_a_new_tool_call(self):
+        service = make_service()
+        service.casatunes_completion_marker = True
+        service.push_frame = AsyncMock()
+        audio = SimpleNamespace(type="message", content=[SimpleNamespace(type="output_audio")])
+        with patch.object(OpenAIRealtimeLLMService, "_handle_evt_response_done", new=AsyncMock()):
+            await service._handle_evt_response_done(response_done(
+                output=[audio, SimpleNamespace(type="function_call")],
+            ))
+        self.assertTrue(service.push_frame.await_args.args[0].started_tool_call)
+
+
 class TestSilentResponses(unittest.IsolatedAsyncioTestCase):
     async def run_done(self, evt, with_audio=False):
         service = make_service()

@@ -376,7 +376,11 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
         if getattr(self, "casatunes_completion_marker", False) and evt.response.status == "completed":
             action_gate = getattr(self, "action_gate", None)
             if action_gate is None or not action_gate.has_pending(self.device_id):
-                await self.push_frame(CasaTunesCompletedFrame())
+                started_tool = any(
+                    getattr(item, "type", None) == "function_call"
+                    for item in evt.response.output or ()
+                )
+                await self.push_frame(CasaTunesCompletedFrame(started_tool_call=started_tool))
         await super()._handle_evt_response_done(evt)
         if silent:
             callback = getattr(self, "on_silent_response", None)

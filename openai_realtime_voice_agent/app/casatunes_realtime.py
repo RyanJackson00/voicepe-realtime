@@ -47,6 +47,7 @@ _CONFIRMATION_RE = re.compile(
     r"unlock|lock|garage|gate|alarm|disarm|arm the|open the door)\b",
     re.IGNORECASE,
 )
+_FOLLOWUP_QUESTION_RE = re.compile(r"""[?؟？]["'’”»\])]*$""")
 _SPEECH_FRAMES = (TTSTextFrame, LLMTextFrame, OutputAudioRawFrame, TTSStartedFrame, TTSStoppedFrame)
 _SATELLITE_AUDIO = (OutputAudioRawFrame, TTSStartedFrame, TTSStoppedFrame)
 
@@ -56,6 +57,7 @@ class CasaTunesCompletedFrame(ControlFrame):
     """The server completed a response that has no pending confirmation."""
 
     completed_at: float = field(default_factory=monotonic)
+    started_tool_call: bool = False
 
 
 class CasaTunesRealtimeOutput(FrameProcessor):
@@ -81,7 +83,7 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         self._buffering = False
         self._bypass_until_end = False
         self._drop_until_start = False
-        self._completed_at: Optional[float] = None
+        self._completion: Optional[CasaTunesCompletedFrame] = None
         self._held: list[Frame] = []
         self._audio_bytes = 0
         self._frame_lock = asyncio.Lock()
@@ -104,7 +106,7 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         self._audio_bytes = 0
         self._buffering = False
         self._bypass_until_end = False
-        self._completed_at = None
+        self._completion = None
 
     def interrupt(self):
         self._reset()
@@ -138,26 +140,36 @@ class CasaTunesRealtimeOutput(FrameProcessor):
                 await self._give_up(generation, direction)
         self._watchdog = spawn(watch(), "casatunes-hold")
 
-    async def _deliver(self, frames: list[Frame], completed_at: Optional[float], generation: int,
+    async def _deliver(self, frames: list[Frame], completion: Optional[CasaTunesCompletedFrame],
+                       generation: int,
                        direction: FrameDirection):
         spoken = "".join(
             frame.text for frame in frames
             if isinstance(frame, (TTSTextFrame, LLMTextFrame)) and frame.text
         ).strip()
-        eligible = (
-            completed_at is not None and spoken and len(spoken) <= 1500
-            and any(isinstance(frame, OutputAudioRawFrame) and frame.audio for frame in frames)
-            and not _CONFIRMATION_RE.search(spoken)
-            and self.bridge.eligible(self.device_id)
-        )
+        needs_local_reply = _FOLLOWUP_QUESTION_RE.search(spoken) or _CONFIRMATION_RE.search(spoken)
+        has_audio = any(isinstance(frame, OutputAudioRawFrame) and frame.audio for frame in frames)
+        if completion is not None and completion.started_tool_call and not needs_local_reply:
+            # Speech produced alongside a new tool call is provisional. Do
+            # not play it or close the turn before the tool returns.
+            if has_audio:
+                _LOG.info("CasaTunes skipped speech from a tool-call response")
+            await self._release(
+                [frame for frame in frames if not isinstance(frame, _SPEECH_FRAMES)],
+                generation, direction,
+            )
+            return
         result = DeliveryResult.REJECTED
+        eligible = False
+        if completion is not None and spoken and len(spoken) <= 1500 and has_audio:
+            eligible = not needs_local_reply and self.bridge.eligible(self.device_id)
         if eligible:
             dispatched_at = monotonic()
             result = await self.bridge.speak(device_id=self.device_id, text=spoken)
             _LOG.info(
                 "CasaTunes delivery timing result=%s model_complete_to_dispatch_ms=%d "
                 "service_roundtrip_ms=%d",
-                result.name.lower(), round((dispatched_at - completed_at) * 1000),
+                result.name.lower(), round((dispatched_at - completion.completed_at) * 1000),
                 round((monotonic() - dispatched_at) * 1000),
             )
         if generation != self._generation:
@@ -203,7 +215,7 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         if self._drop_until_start:
             return
         if isinstance(frame, CasaTunesCompletedFrame):
-            self._completed_at = frame.completed_at if self._buffering else None
+            self._completion = frame if self._buffering else None
             return
         if self._bypass_until_end:
             if isinstance(frame, LLMFullResponseEndFrame):
@@ -223,6 +235,6 @@ class CasaTunesRealtimeOutput(FrameProcessor):
             self._cancel_watchdog()
             frames, self._held = self._held, []
             self._delivery = spawn(
-                self._deliver(frames, self._completed_at, self._generation, direction),
+                self._deliver(frames, self._completion, self._generation, direction),
                 "casatunes-delivery",
             )
