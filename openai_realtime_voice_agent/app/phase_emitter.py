@@ -76,9 +76,11 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
 
 from pipecat.frames.frames import (
     Frame,
+    ControlFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
     BotStartedSpeakingFrame,
@@ -87,6 +89,11 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExternalReplyFrame(ControlFrame):
+    """A reply left the satellite path without a local playout deadline."""
 
 
 class TurnLiveness:
@@ -215,6 +222,18 @@ class PhaseEmitter(FrameProcessor):
         self._cancel_watchdog()
         self._cancel_silent()
         self._current = "idle"
+
+    async def close_followup(self) -> None:
+        """Close a completed farewell without reopening the device mic."""
+        if self._closed:
+            return
+        self._cancel_pending_idle()
+        self._cancel_watchdog()
+        self._cancel_silent()
+        self._suppress_thinking = True
+        self._turn_end("followup_closed")
+        await self._emit("idle", force=True, extra={"followup": False})
+        self.note_wake()
 
     async def force_idle(self, reason: str = "") -> None:
         """Declare the current turn dead and put the device in idle.
@@ -466,6 +485,15 @@ class PhaseEmitter(FrameProcessor):
                 self._arm_watchdog()
                 if self.on_thinking is not None:
                     self.on_thinking()
+        elif isinstance(frame, ExternalReplyFrame):
+            if direction == FrameDirection.DOWNSTREAM and self._current in ("thinking", "replying"):
+                self._cancel_pending_idle()
+                self._cancel_watchdog()
+                self._cancel_silent()
+                self._suppress_thinking = True
+                await self._emit("idle", extra={"followup": False})
+                self._turn_end("external_reply")
+            return
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._suppress_thinking = False
             self._cancel_pending_idle()

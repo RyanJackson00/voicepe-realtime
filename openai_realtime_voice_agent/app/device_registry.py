@@ -129,6 +129,8 @@ class DeviceConnection:
     # The single writer of this device's audio (app/speaker_owner.py) on
     # GPT-Live; None on the Realtime runtime (the transport's path).
     speaker_owner: Any = None
+    authenticated: bool = False
+    casatunes_output: Any = None
 
     def touch(self) -> None:
         """Mark this device as the most recently used one."""

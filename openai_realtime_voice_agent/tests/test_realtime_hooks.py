@@ -2,11 +2,12 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
 from app.main import SafeRealtimeLLMService
+from app.casatunes_realtime import CasaTunesCompletedFrame
 from app.realtime_observer import ObservedSocket, extract_event_type
 from app.turn_timeline import TurnTimeline
 
@@ -80,6 +81,31 @@ class TestTimelineHooks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn.speech_audio_ms, 1150)
         self.assertIn("speech_stopped", turn.stamps)
 
+    async def test_standalone_farewell_closes_only_current_follow_up(self):
+        for source, words, item_id, closes in (
+            ("follow_up", "thanks!", "current", True),
+            ("follow_up", "Thank you.", "current", True),
+            ("follow_up", "thanks, what about tomorrow?", "current", False),
+            ("follow_up", "thanks.", "stale", False),
+            ("wake_word", "thanks.", "current", False),
+        ):
+            with self.subTest(source=source, words=words, item_id=item_id):
+                service = make_service()
+                service.turn_timeline.begin("t1", source=source)
+                service._followup_input_item = "current"
+                service.on_quiet_followup_close = AsyncMock()
+                event = SimpleNamespace(transcript=words, item_id=item_id)
+                with patch.object(OpenAIRealtimeLLMService,
+                                  "handle_evt_input_audio_transcription_completed",
+                                  new=AsyncMock()) as transcript, \
+                     patch.object(OpenAIRealtimeLLMService,
+                                  "_handle_evt_audio_delta", new=AsyncMock()) as audio:
+                    await service.handle_evt_input_audio_transcription_completed(event)
+                    await service._handle_evt_audio_delta(SimpleNamespace(response_id="r1"))
+                transcript.assert_awaited_once_with(event)
+                self.assertEqual(service.on_quiet_followup_close.await_count, int(closes))
+                self.assertEqual(audio.await_count, int(not closes))
+
     async def test_first_audio_delta_per_response_marks_and_notifies_once(self):
         service = make_service()
         service.turn_timeline.begin("t1")
@@ -111,6 +137,44 @@ def response_done(status="completed", rid="r9", output=()):
     usage = SimpleNamespace(input_token_details=None, output_token_details=None,
                             input_tokens=1, output_tokens=0, total_tokens=1)
     return SimpleNamespace(response=SimpleNamespace(id=rid, status=status, output=list(output), usage=usage))
+
+
+class TestCasaTunesCompletion(unittest.IsolatedAsyncioTestCase):
+    async def test_only_completed_responses_without_confirmation_are_marked(self):
+        for status, pending, expected in (
+            ("completed", False, True), ("completed", True, False),
+            ("incomplete", False, False), ("cancelled", False, False),
+        ):
+            with self.subTest(status=status, pending=pending):
+                service = make_service()
+                service.device_id = "office-id"
+                service.casatunes_completion_marker = True
+                service.action_gate = Mock()
+                service.action_gate.has_pending.return_value = pending
+                service.push_frame = AsyncMock()
+
+                async def finish(event):
+                    # Pipecat emits the end bracket in this callback.
+                    self.assertEqual(service.push_frame.await_count, int(expected))
+
+                with patch.object(OpenAIRealtimeLLMService, "_handle_evt_response_done",
+                                  new=AsyncMock(side_effect=finish)):
+                    await service._handle_evt_response_done(response_done(status=status))
+                if expected:
+                    self.assertIsInstance(service.push_frame.await_args.args[0],
+                                          CasaTunesCompletedFrame)
+
+
+    async def test_completed_response_marks_output_with_a_new_tool_call(self):
+        service = make_service()
+        service.casatunes_completion_marker = True
+        service.push_frame = AsyncMock()
+        audio = SimpleNamespace(type="message", content=[SimpleNamespace(type="output_audio")])
+        with patch.object(OpenAIRealtimeLLMService, "_handle_evt_response_done", new=AsyncMock()):
+            await service._handle_evt_response_done(response_done(
+                output=[audio, SimpleNamespace(type="function_call")],
+            ))
+        self.assertTrue(service.push_frame.await_args.args[0].started_tool_call)
 
 
 class TestSilentResponses(unittest.IsolatedAsyncioTestCase):

@@ -42,6 +42,7 @@ class _Probe:
 class _Prompts:
     enabled = True
     progress_delay_s = 0.01
+    ack_delay_s = 0.01
 
     def __init__(self):
         self.spoken = []
@@ -49,6 +50,9 @@ class _Prompts:
     async def say_text(self, text, device_id):
         self.spoken.append((text, device_id))
         return True
+
+    def is_slow(self, name, median):
+        return name == "web_search"
 
 
 class TestPhraseSelection(unittest.TestCase):
@@ -331,6 +335,50 @@ class TestProgressController(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.03)
         self.assertEqual(service.spoken_prompts.spoken,
                          [("Let me check, one second.", "kitchen")])
+
+    async def test_bridged_connection_skips_both_progress_schedulers(self):
+        bridged = self.make_service("search the web for today's weather")
+        bridged.suppress_progress_ack = True
+        other = self.make_service("search the web for today's weather", speaker="unknown")
+        # The tool-level path can run independently from the thinking hook.
+        ack = other._schedule_slow_tool_ack("web_search")
+        await ack
+        self.assertEqual(other.spoken_prompts.spoken, [("Let me check that.", "kitchen")])
+
+        bridged.schedule_progress_ack()
+        self.assertIsNone(getattr(bridged, "_progress_ack_task", None))
+        self.assertIsNone(bridged._schedule_slow_tool_ack("web_search"))
+        self.assertEqual(bridged.spoken_prompts.spoken, [])
+
+    async def test_dashboard_route_suppresses_each_progress_path_until_switched_off(self):
+        for path in ("early", "contextual", "slow_tool"):
+            with self.subTest(path=path):
+                transcript = ("search the web for today's weather" if path == "early"
+                              else "could you check this for me")
+                service = self.make_service(transcript, speaker="unknown")
+                use_casatunes = False
+
+                async def selected_route():
+                    return use_casatunes
+
+                service.progress_ack_blocked = selected_route
+
+                def schedule():
+                    if path == "slow_tool":
+                        return service._schedule_slow_tool_ack("web_search")
+                    service.schedule_progress_ack()
+                    if path == "contextual":
+                        service._set_progress_context("web_search", {})
+                    return service._progress_ack_task
+
+                pending = schedule()
+                use_casatunes = True
+                await pending
+                self.assertEqual(service.spoken_prompts.spoken, [])
+
+                use_casatunes = False
+                await schedule()
+                self.assertEqual(len(service.spoken_prompts.spoken), 1)
 
     async def test_person_location_gets_early_contextual_cue(self):
         service = self.make_service("where is Alex")

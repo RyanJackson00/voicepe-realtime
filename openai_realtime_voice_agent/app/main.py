@@ -11,6 +11,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from app.background import spawn
+from app.casatunes_realtime import CasaTunesCompletedFrame
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
@@ -130,8 +131,8 @@ def _env_list(name: str, default: str = "") -> list:
 TOOL_ACK_INSTRUCTIONS = """
 
 TOOL USE: Call tools without announcing them — never say "let me check" or
-"one moment" before or while a tool runs. When a lookup is slow, the device
-plays a short acknowledgement by itself. Speak once, with the result.
+"one moment" before or while a tool runs. The app handles any progress cue.
+Speak once, with the result.
 """
 
 CONFIRMATION_INSTRUCTIONS = """
@@ -299,6 +300,11 @@ def live_backend_instructions(
     return base + LIVE_BACKEND_RESULT_INSTRUCTIONS
 
 
+def is_followup_farewell(text: str) -> bool:
+    """Only an entire, standalone acknowledgement can close a follow-up."""
+    return " ".join(text.strip().strip(".,!?…").lower().split()) in {"thanks", "thank you"}
+
+
 class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
@@ -372,6 +378,14 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
         except Exception as e:
             logger.debug(f"usage accounting failed: {e!r}")
         silent = self._is_silent_response(evt)
+        if getattr(self, "casatunes_completion_marker", False) and evt.response.status == "completed":
+            action_gate = getattr(self, "action_gate", None)
+            if action_gate is None or not action_gate.has_pending(self.device_id):
+                started_tool = any(
+                    getattr(item, "type", None) == "function_call"
+                    for item in evt.response.output or ()
+                )
+                await self.push_frame(CasaTunesCompletedFrame(started_tool_call=started_tool))
         await super()._handle_evt_response_done(evt)
         if silent:
             callback = getattr(self, "on_silent_response", None)
@@ -412,6 +426,8 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
         await super()._send_user_audio(frame)
 
     async def _handle_evt_speech_started(self, evt):  # type: ignore[override]
+        self._quiet_followup_closed = False
+        self._followup_input_item = getattr(evt, "item_id", None)
         timeline = self._timeline()
         if timeline is not None:
             turn = timeline.ensure_active()
@@ -430,7 +446,21 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
             )
         await super()._handle_evt_speech_stopped(evt)
 
+    async def handle_evt_input_audio_transcription_completed(self, evt):
+        timeline = self._timeline()
+        turn = timeline.current if timeline is not None else None
+        close = getattr(self, "on_quiet_followup_close", None)
+        if (close is not None and turn is not None and not turn.done
+                and turn.source == "follow_up"
+                and getattr(self, "_followup_input_item", None) == getattr(evt, "item_id", None)
+                and is_followup_farewell(evt.transcript or "")):
+            self._quiet_followup_closed = True
+            await close()
+        await super().handle_evt_input_audio_transcription_completed(evt)
+
     async def _handle_evt_audio_delta(self, evt):  # type: ignore[override]
+        if getattr(self, "_quiet_followup_closed", False):
+            return
         responses = getattr(self, "_responses_with_audio", None)
         if responses is None:
             responses = self._responses_with_audio = set()
@@ -1773,7 +1803,10 @@ class Application:
         session_properties = SessionProperties(
             # Voice-instructed memory: standing household notes are folded
             # into the instructions at every session creation.
-            instructions=self._conversation_instructions(),
+            instructions=self._conversation_instructions() + (
+                "\nIf a follow-up consists only of 'thanks' or 'thank you', stay silent and "
+                "call no tools. Answer any actual request even if it begins with thanks."
+            ),
             # Cap the reply length: bounds runaway monologues + per-response
             # output-token cost. None = unlimited (the API default "inf").
             max_output_tokens=self.max_output_tokens,
@@ -1989,6 +2022,7 @@ class Application:
         connection.turn_liveness = TurnLiveness()
         service.turn_liveness = connection.turn_liveness
         service.device_id = connection.device_id
+        service.casatunes_device_authenticated = connection.authenticated
         service.turn_timeline = connection.turn_timeline
         service.action_gate = self.action_gate
         service.spoken_prompts = self.spoken_prompts

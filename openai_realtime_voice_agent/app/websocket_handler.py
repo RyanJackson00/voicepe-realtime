@@ -32,6 +32,7 @@ from app.phase_emitter import PhaseEmitter
 from app.followup_hold import FollowUpHold
 from app.output_lead_buffer import OutputLeadBuffer
 from app.transcript_logger import TranscriptLogger
+from app.casatunes_realtime import CasaTunesRealtimeOutput
 from app.turn_timeline import TurnTimeline
 from app.input_replay import InputReplayBuffer
 from app.wake_events import WakeAudioCapture, WakeEventStore
@@ -713,6 +714,7 @@ class WebSocketHandler:
         service.on_audible_output = gate.note_audible_output
         service.on_backend_activity = gate.note_backend_activity
         service.on_reply_finished = gate.note_reply_finished
+        service.on_external_reply = gate.note_turn_resolved
         if hasattr(service, "on_task_reopen"):
             # A background task's result arriving after the session closed
             # may open one short session to speak it: through this gate, so
@@ -907,20 +909,32 @@ class WebSocketHandler:
         # opposite sides of the service (see transcript_logger.py): "user" before
         # the LLM, "assistant" after it.
         if context_aggregator:
-            pipeline_components.extend([
-                context_aggregator.user(),
-                TranscriptLogger(capture="user"),
-                openai_service,
-                TranscriptLogger(capture="assistant"),
-                context_aggregator.assistant(),
-            ])
-        else:
-            pipeline_components.extend([
-                TranscriptLogger(capture="user"),
-                openai_service,
-                TranscriptLogger(capture="assistant"),
-            ])
+            pipeline_components.append(context_aggregator.user())
+        pipeline_components.extend([
+            TranscriptLogger(capture="user"),
+            openai_service,
+            TranscriptLogger(capture="assistant"),
+        ])
 
+        # gpt-realtime-2 (the currently installed model) uses Pipecat, not
+        # GPT-Live's LiveReplyAdmission. The bridge is a no-op unless its
+        # environment opt-in and a matching device route are configured.
+        # Observe the reply before the assistant aggregator consumes the
+        # response boundary and text frames. Keep the transcript tap upstream.
+        if isinstance(openai_service, OpenAIRealtimeLLMService) and connection.authenticated:
+            bridge_output = CasaTunesRealtimeOutput(device_id=client_id)
+            if bridge_output.bridge.eligible(client_id):
+                openai_service.casatunes_completion_marker = True
+                # Progress clips go directly to the satellite outside this pipeline.
+                if bridge_output.bridge.route_for(client_id) is None:
+                    openai_service.suppress_progress_ack = True
+                else:
+                    openai_service.progress_ack_blocked = lambda: bridge_output.bridge.selected(client_id)
+                connection.casatunes_output = bridge_output
+                pipeline_components.append(bridge_output)
+
+        if context_aggregator:
+            pipeline_components.append(context_aggregator.assistant())
         pipeline_components.append(TimelineMetricsTap(lambda: connection.turn_timeline))
 
         # Emit va_client phase messages (listening/thinking/replying/idle) to
@@ -1108,6 +1122,9 @@ class WebSocketHandler:
                 await owner.acknowledge_interrupt(info.get("seq"))
 
         async def _handle_device_interrupt():
+            bridge_output = getattr(connection, "casatunes_output", None)
+            if bridge_output is not None:
+                bridge_output.interrupt()
             if hold is not None:
                 hold.disarm("stop")  # the device closed its mic on the stop
             turn = timeline.current if timeline is not None else None
@@ -1178,6 +1195,19 @@ class WebSocketHandler:
                 logger.info(f"🛑 post-interrupt racing-response cancel no-op ({e!r})")
 
         controls.on_assistant_response_started(_kill_racing_response)
+
+        async def _close_quiet_followup():
+            route = getattr(connection, "casatunes_output", None)
+            if route is not None:
+                route.interrupt()
+            await phase_emitter.close_followup()
+            try:
+                await controls.cancel_active_response("standalone follow-up farewell")
+            except Exception:
+                logger.debug("Follow-up response already closed", exc_info=True)
+
+        if isinstance(openai_service, OpenAIRealtimeLLMService):
+            openai_service.on_quiet_followup_close = _close_quiet_followup
 
         async def _on_device_session_start(info=None):
             owner = getattr(connection, "speaker_owner", None)
@@ -1959,6 +1989,7 @@ class WebSocketHandler:
         serializer = RawAudioSerializer(device_id)
         connection = DeviceConnection(
             device_id=device_id, websocket=websocket, serializer=serializer,
+            authenticated=decision.authenticated,
             # Resolved once here; every per-device setting reads this.
             profile=self.device_directory.get(device_id),
         )

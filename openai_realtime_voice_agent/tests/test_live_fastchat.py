@@ -128,19 +128,26 @@ class SpeculativeVerdict(Patched):
     async def test_words_added_after_the_pause_are_classified_again(self):
         backend = FakeBackend(response(message("CHAT")))
         backend.gate.clear()
-        with patch.object(live_service_module, "USER_TURN_GAP_S", 0.5), \
+        # This case controls the end of the utterance explicitly. The other
+        # speculative test exercises the real automatic turn-close timing.
+        with patch.object(live_service_module, "USER_TURN_GAP_S", 3600), \
                 patch.object(live_service_module, "CHAT_SPECULATIVE_PAUSE_S", 0.1):
             async with RouterHarness(self, backend) as h:
                 clf = FakeClassifier("CHAT", 0.05)
                 h.service.chat_classifier = clf
-                h.socket.push({"type": "session.input_transcript.delta", "delta": "Tell me about",
-                               "start_ms": 1000, "end_ms": 1500})
-                await asyncio.sleep(0.25)
-                h.socket.push({"type": "session.input_transcript.delta", "delta": " turning off the Foyer Lamp.",
-                               "start_ms": 1500, "end_ms": 2500})
-                await asyncio.sleep(0.9)
+                await h.service._on_transcript_delta(
+                    "user", {"delta": "Tell me about", "start_ms": 1000, "end_ms": 1500},
+                )
+                await asyncio.wait_for(h.service._spec_timer, 3)
+                self.assertIsNotNone(h.service._spec_classify)
+                await asyncio.wait_for(h.service._spec_classify[1], 3)
+                await h.service._on_transcript_delta(
+                    "user", {"delta": " turning off the Foyer Lamp.", "start_ms": 1500, "end_ms": 2500},
+                )
+                await h.service._close_open_turns()
                 self.assertEqual([t for t, _ in clf.asked], ["Tell me about"],
                                  "the speculative call saw a prefix; the closed text is request-shaped")
+                self.assertIsNotNone(h.service._op)
                 self.assertEqual(h.service._op.fast_veto, "request-shaped")
                 self.assertEqual(h.service.router_stats["fast_chat"], 0)
 
