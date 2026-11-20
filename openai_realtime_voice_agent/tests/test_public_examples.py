@@ -40,6 +40,8 @@ SPEAKER_FIXTURE_NAMES = frozenset({
 # entry to be in use somewhere in the scanned sources, so a real name cannot be
 # parked here ahead of the fixture that would spend it.
 NON_NAME_LITERALS = {
+    'Amazon': 'Amazon Music is the named streaming music service in app/casatunes_native_search.py',
+    'Greta Van Fleet': 'public rock band used as an artist search fixture in tests/test_casatunes_native_search.py',
     'Door': 'fictional device name in the router-structure fixtures (tests/test_router_structure.py)',
     'Gate': 'fictional device name in the router-structure fixtures (tests/test_router_structure.py)',
     'Hall': 'fictional room in the router-structure fixtures (tests/test_router_structure.py)',
