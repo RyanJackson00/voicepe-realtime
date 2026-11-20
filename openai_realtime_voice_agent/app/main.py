@@ -16,6 +16,7 @@ from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
 from app.casatunes_music_tool import (CasaTunesMusic, MusicConfig, get_music_tool_definitions, register_music_tools)
+from app.casatunes_native_search import (NativeCasaTunesMusic, get_native_music_tool_definition, register_native_music_tool)
 from app.audio_recording_service import AudioRecordingService
 from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
@@ -1636,6 +1637,7 @@ class Application:
 
         if os.getenv("CASATUNES_MUSIC_ENABLED", "").lower() in ("1", "true", "yes"):
             all_tools.extend(get_music_tool_definitions())
+            all_tools.append(get_native_music_tool_definition())
 
         # Voice enrollment tool (fork): guided voice-training capture.
         all_tools.append(get_enrollment_tool_definition())
@@ -2021,7 +2023,9 @@ class Application:
             logger.info(f"✅ Registered web_search tool handler (model={self.web_search_model})")
 
         if os.getenv("CASATUNES_MUSIC_ENABLED", "").lower() in ("1", "true", "yes"):
-            register_music_tools(service, CasaTunesMusic(MusicConfig.from_env()))
+            config = MusicConfig.from_env()
+            register_music_tools(service, CasaTunesMusic(config))
+            register_native_music_tool(service, NativeCasaTunesMusic(config))
             logger.info("Registered opt-in CasaTunes music tools")
 
         # Register voice enrollment tool handler (fork). The speaker-name
