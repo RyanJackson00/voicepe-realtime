@@ -19,6 +19,15 @@ class ConfigTests(unittest.TestCase):
             enabled=True,allowed_rooms=("media_player.office",),
             ha_token="fake",ha_url="http://example.com").valid_room("media_player.office"))
 
+    def test_resolves_plain_spoken_room_from_allowlist_only(self):
+        cfg=MusicConfig(enabled=True,
+                        allowed_rooms=("media_player.01_living_room","media_player.04_office"),
+                        ha_token="fake")
+        self.assertEqual(cfg.resolve_room("living room"),"media_player.01_living_room")
+        self.assertEqual(cfg.resolve_room("Office"),"media_player.04_office")
+        self.assertIsNone(cfg.resolve_room("Gabe"))
+        self.assertIsNone(cfg.resolve_room("living"))
+
     def test_only_supported_tools_exposed(self):
         names={t["name"] for t in get_music_tool_definitions()}
         self.assertEqual(names,{"casatunes_assign_source"})
