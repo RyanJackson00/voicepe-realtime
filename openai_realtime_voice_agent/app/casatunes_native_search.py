@@ -37,7 +37,7 @@ def get_native_music_tool_definition() -> dict[str, Any]:
                 "track": {"type":"string","description":"Song title, optional"},
                 "mode": {"type":"string","enum":["playNow","playShuffle","playUnshuffle","add","addplay"],
                          "description":"playNow replaces queue; add appends; addplay queues and starts. Default playNow."},
-                "expected_source": {"type":"string","description":"Optional exact CasaTunes source selected on this room, e.g., Dad"},
+                "expected_source": {"type":"string","description":"Optional exact CasaTunes source selected on this room, e.g., Sam"},
             },
             "required":["room"],
         },
