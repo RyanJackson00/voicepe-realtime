@@ -91,6 +91,9 @@ Two places hold configuration:
 | `devices` | *(empty)* | Several Voice PEs on one add-on: per-device name, port, announce port and settings. See [Per-device settings](getting-started.md#per-device-settings). |
 | `mcp_persistent_session` | *(hidden)* `true` | Reuse one Home Assistant tool session instead of opening a new one per command. |
 
+| `casatunes_music_enabled` | *(unset; off)* | Opt in to CasaTunes music commands. Leave unset until a one-room canary is approved; no existing installation is changed by the new option. |
+| `casatunes_music_rooms` | *(unset; empty)* | Comma-separated exact CasaTunes `media_player.*` zone IDs allowed for music commands. Start with the Office only; source queues may be shared across rooms. |
+
 ## ⚙️ Advanced
 
 | Option | Default | Purpose / when to change |
