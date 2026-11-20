@@ -38,11 +38,11 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_uses_verified_service_contract(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(return_value={
-            "state":"off","attributes":{"source":"Dad","source_list":["Dad","Mom"]}})
+            "state":"off","attributes":{"source":"Sam","source_list":["Sam","Alex"]}})
         tool._ha = AsyncMock(return_value=[])
         with patch("app.casatunes_native_search.aiohttp.ClientSession") as session:
             result = await tool.request_music(ROOM,artist="Greta Van Fleet",
-                                              mode="playNow",expected_source="Dad")
+                                              mode="playNow",expected_source="Sam")
             session.assert_called_once()
         self.assertTrue(result["ok"])
         request = tool._ha.await_args
@@ -57,11 +57,11 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
                           ha_token="fake")
         tool = NativeCasaTunesMusic(cfg)
         tool._room_state = AsyncMock(return_value={
-            "state":"off", "attributes":{"source":"Dad","source_list":["Dad","Mom"]}})
+            "state":"off", "attributes":{"source":"Sam","source_list":["Sam","Alex"]}})
         tool._ha = AsyncMock(return_value=[])
         with patch("app.casatunes_native_search.aiohttp.ClientSession"):
             result = await tool.request_music("living room", artist="Greta Van Fleet",
-                                              mode="playNow", expected_source="Dad")
+                                              mode="playNow", expected_source="Sam")
         self.assertTrue(result["ok"])
         self.assertEqual(tool._ha.await_args.args[3]["entity_id"],
                          "media_player.01_living_room")
@@ -69,19 +69,19 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
     async def test_mismatched_source_prevents_play(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(return_value={
-            "state":"off","attributes":{"source":"Mom","source_list":["Dad","Mom"]}})
+            "state":"off","attributes":{"source":"Alex","source_list":["Sam","Alex"]}})
         tool._ha = AsyncMock()
         with patch("app.casatunes_native_search.aiohttp.ClientSession"):
             result = await tool.request_music(ROOM,artist="Greta Van Fleet",
-                                              expected_source="Dad")
+                                              expected_source="Sam")
         self.assertFalse(result["ok"])
         tool._ha.assert_not_awaited()
 
     async def test_playback_requires_matching_readback_metadata(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(side_effect=[
-            {"state":"off","attributes":{"source":"Dad","source_list":["Dad","Mom"]}},
-            {"state":"playing","attributes":{"source":"Dad","source_list":["Dad","Mom"],
+            {"state":"off","attributes":{"source":"Sam","source_list":["Sam","Alex"]}},
+            {"state":"playing","attributes":{"source":"Sam","source_list":["Sam","Alex"],
                                              "media_artist":"Greta Van Fleet"}}
         ])
         tool._ha = AsyncMock(return_value=[])
@@ -93,10 +93,10 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
     async def test_playing_source_in_other_room_blocks_queue_replacement(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(return_value={
-            "state":"off","attributes":{"source":"Dad","source_list":["Dad","Mom"]}})
+            "state":"off","attributes":{"source":"Sam","source_list":["Sam","Alex"]}})
         tool._ha = AsyncMock(return_value=[
             {"entity_id":"media_player.living", "state":"playing",
-             "attributes":{"source":"Dad","source_list":["Dad","Mom"]}}
+             "attributes":{"source":"Sam","source_list":["Sam","Alex"]}}
         ])
         with patch("app.casatunes_native_search.aiohttp.ClientSession"):
             result = await tool.request_music(ROOM, artist="Greta Van Fleet",
