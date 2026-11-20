@@ -42,7 +42,7 @@ class MusicConfigTests(unittest.TestCase):
 
     def test_tool_definitions_present(self):
         names = {tool["name"] for tool in get_music_tool_definitions()}
-        self.assertEqual(names, {"casatunes_search_music","casatunes_play_music","casatunes_assign_source"})
+        self.assertEqual(names, {"casatunes_assign_source"})
 
 
 class MusicBehaviorTests(unittest.IsolatedAsyncioTestCase):
