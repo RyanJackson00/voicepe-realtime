@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 LOG = logging.getLogger(__name__)
-_ENTITY_RE = re.compile(r"^media_player\\.[a-z0-9_]+$")
+_ENTITY_RE = re.compile(r"^media_player[.][a-z0-9_]+$")
 _SOURCE_RE = re.compile(r"^[a-zA-Z0-9 _.-]{1,64}$")
 _MAX_RESULTS = 10
 
