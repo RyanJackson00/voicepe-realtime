@@ -217,42 +217,20 @@ class CasaTunesMusic:
 
 
 def get_music_tool_definitions() -> list[dict[str, Any]]:
-    return [
-        {"type":"function","name":"casatunes_search_music",
-         "description":"Search music on a CasaTunes room's assigned music source; Amazon Music artist/song/album lookup. Only returns candidates. Never claim it started playback.",
-         "parameters":{"type":"object","properties":{
-             "room":{"type":"string","description":"Exact allowed Home Assistant media_player entity_id"},
-             "query":{"type":"string","description":"Artist, song, album or playlist"},
-             "service":{"type":"string","description":"Music service; default Amazon Music"}},
-             "required":["room","query"]}},
-        {"type":"function","name":"casatunes_assign_source",
-         "description":"Assign an existing CasaTunes player/source such as Dad or Mom to an allowed room. Validate source against the room's source_list; returns verified status.",
-         "parameters":{"type":"object","properties":{
-             "room":{"type":"string","description":"Exact allowlisted Home Assistant CasaTunes room entity ID"},
-             "source":{"type":"string","description":"Existing CasaTunes source name"}},
-             "required":["room","source"]}},
-        {"type":"function","name":"casatunes_play_music",
-         "description":"Play a previously searched CasaTunes result in its same room. Use only selection key returned from casatunes_search_music, after user requested playback.",
-         "parameters":{"type":"object","properties":{
-             "room":{"type":"string"},"selection":{"type":"string"}},
-             "required":["room","selection"]}},
-    ]
+    # Only verified HA service contracts are offered to the model.
+    return [{
+        "type":"function","name":"casatunes_assign_source",
+        "description":"Assign an existing CasaTunes player/source such as Dad or Mom to an allowed room. Validate source against room's source_list; returns verified status.",
+        "parameters":{"type":"object","properties":{
+            "room":{"type":"string","description":"Exact allowlisted CasaTunes media_player entity ID"},
+            "source":{"type":"string","description":"Existing CasaTunes source name"}},
+            "required":["room","source"]},
+    }]
 
 
 def register_music_tools(service: Any, music: CasaTunesMusic) -> None:
-    async def find(params):
-        args = params.arguments or {}
-        await params.result_callback(await music.search(
-            str(args.get("room","")), str(args.get("query","")),
-            str(args.get("service","Amazon Music"))))
-    async def play(params):
-        args = params.arguments or {}
-        await params.result_callback(await music.play(
-            str(args.get("room","")), str(args.get("selection",""))))
     async def assign(params):
         args = params.arguments or {}
         await params.result_callback(await music.assign_source(
             str(args.get("room","")), str(args.get("source",""))))
     service.register_function("casatunes_assign_source", assign)
-    service.register_function("casatunes_search_music", find)
-    service.register_function("casatunes_play_music", play)
