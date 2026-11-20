@@ -77,15 +77,28 @@ class NativeCasaTunesMusic(CasaTunesMusic):
                 # Fail closed on a source in use by any OTHER enabled room when
                 # we are replacing its playlist.
                 if source and mode in {"playNow","playShuffle","playUnshuffle"}:
-                    for other in self.config.allowed_rooms:
-                        if other == room or not self.config.valid_room(other):
+                    # A source may also be used by a room OUTSIDE the music
+                    # tool's allowlist. Scan the full read-only state index so
+                    # replacing Dad's queue cannot accidentally change music
+                    # already playing in another unlisted zone.
+                    states = await self._ha(session, "GET", "/api/states")
+                    if not isinstance(states, list):
+                        raise MusicError("Could not verify other CasaTunes rooms")
+                    for other in states:
+                        if not isinstance(other, dict) or other.get("entity_id") == room:
                             continue
-                        state = await self._room_state(session, other)
-                        other_attrs = state.get("attributes") or {}
-                        if state.get("state") == "playing" and other_attrs.get("source") == source:
-                            return {"ok": False, "error": (
-                                "That source is already playing in another enabled room. "
-                                "Choose another source or request shared-source playback explicitly."
+                        attrs_other = other.get("attributes") or {}
+                        if not isinstance(attrs_other, dict):
+                            continue
+                        # CasaTunes media players advertise a source_list;
+                        # require membership and state-playing to flag a
+                        # potential shared-source collision.
+                        if (other.get("state") == "playing"
+                                and source == attrs_other.get("source")
+                                and source in (attrs_other.get("source_list") or [])):
+                            return {"ok":False,"error":(
+                                "That CasaTunes source is currently playing in another room. "
+                                "Choose another source before replacing its queue."
                             )}
                 data = {"entity_id": room, "mode":mode}
                 data.update({k:v for k,v in terms.items() if v})
