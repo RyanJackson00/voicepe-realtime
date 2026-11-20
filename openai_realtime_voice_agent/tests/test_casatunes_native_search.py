@@ -52,6 +52,20 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
                          {"entity_id":ROOM,"mode":"playNow",
                           "keyword_artist":"Greta Van Fleet"})
 
+    async def test_spoken_living_room_artist_request(self):
+        cfg = MusicConfig(enabled=True, allowed_rooms=("media_player.01_living_room",),
+                          ha_token="fake")
+        tool = NativeCasaTunesMusic(cfg)
+        tool._room_state = AsyncMock(return_value={
+            "state":"off", "attributes":{"source":"Dad","source_list":["Dad","Mom"]}})
+        tool._ha = AsyncMock(return_value=[])
+        with patch("app.casatunes_native_search.aiohttp.ClientSession"):
+            result = await tool.request_music("living room", artist="Greta Van Fleet",
+                                              mode="playNow", expected_source="Dad")
+        self.assertTrue(result["ok"])
+        self.assertEqual(tool._ha.await_args.args[3]["entity_id"],
+                         "media_player.01_living_room")
+
     async def test_mismatched_source_prevents_play(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(return_value={
