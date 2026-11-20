@@ -113,6 +113,8 @@ export ANNOUNCE_PORT
 export ANNOUNCE_TOKEN
 export CASATUNES_BRIDGE_ENABLED
 export CASATUNES_OFFICE_DEVICE_ID
+CASATUNES_ROUTES_JSON=$(bashio::config 'casatunes_routes' | jq -sc '[.[] | objects]' 2>/dev/null || echo '[]')
+export CASATUNES_ROUTES_JSON
 export DEVICES_JSON
 export WEBSOCKET_PORT
 export SESSION_REUSE_TIMEOUT_SECONDS

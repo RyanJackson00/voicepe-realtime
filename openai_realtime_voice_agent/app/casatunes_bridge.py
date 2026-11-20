@@ -8,8 +8,10 @@ the satellite audio fallback.  No audio recordings or API tokens are logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum, auto
 from urllib.parse import urlsplit
@@ -45,6 +47,30 @@ def _valid_endpoint(url: str) -> bool:
 
 
 @dataclass(frozen=True)
+class CasaTunesRoute:
+    device_id: str
+    toggle_entity: str
+    service_name: str
+
+    def __post_init__(self):
+        if (not self.device_id or not re.fullmatch(r"input_boolean\.[a-z0-9_]+", self.toggle_entity)
+                or not re.fullmatch(r"[a-z0-9_]+", self.service_name)):
+            raise ValueError("Invalid CasaTunes route")
+
+
+def _configured_routes() -> tuple[CasaTunesRoute, ...]:
+    try:
+        entries = json.loads(os.getenv("CASATUNES_ROUTES_JSON", "[]"))
+        routes = tuple(CasaTunesRoute(**entry) for entry in entries)
+        if len({r.device_id for r in routes}) != len(routes):
+            raise ValueError("Duplicate CasaTunes device")
+        return routes
+    except (TypeError, ValueError):
+        _LOG.warning("Invalid CasaTunes routes; dashboard routing is unavailable")
+        return ()
+
+
+@dataclass(frozen=True)
 class CasaTunesBridgeConfig:
     enabled: bool = False
     office_device_id: str = ""
@@ -53,6 +79,7 @@ class CasaTunesBridgeConfig:
     service_domain: str = "rest_command"
     service_name: str = "casatunes_speak"
     timeout_seconds: float = 8.0
+    routes: tuple[CasaTunesRoute, ...] = ()
 
     @classmethod
     def from_env(cls) -> "CasaTunesBridgeConfig":
@@ -68,6 +95,7 @@ class CasaTunesBridgeConfig:
             # avoid a second long-lived secret in the public fork.
             ha_url=url,
             ha_token=token,
+            routes=_configured_routes(),
         )
 
 
@@ -81,21 +109,49 @@ class CasaTunesBridge:
     def __init__(self, config: CasaTunesBridgeConfig):
         self.config = config
 
+    def route_for(self, device_id: str | None) -> CasaTunesRoute | None:
+        return next((route for route in self.config.routes if route.device_id == device_id), None)
+
     def eligible(self, device_id: str | None) -> bool:
         c = self.config
         return bool(
-            c.enabled and c.office_device_id and device_id
-            and device_id == c.office_device_id
+            c.enabled and device_id
+            and (self.route_for(device_id) is not None or device_id == c.office_device_id)
             and _valid_endpoint(c.ha_url)
             and c.ha_token and c.service_domain and c.service_name
         )
+
+    async def selected(self, device_id: str | None) -> bool:
+        if not self.eligible(device_id):
+            return False
+        route = self.route_for(device_id)
+        if route is None:
+            return True
+        config = self.config
+        url = f"{config.ha_url.rstrip('/')}/api/states/{route.toggle_entity}"
+        try:
+            timeout = aiohttp.ClientTimeout(total=0.35)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    url, headers={"Authorization": "Bearer " + config.ha_token},
+                    allow_redirects=False,
+                ) as response:
+                    if response.status == 200:
+                        state = await response.json()
+                        return isinstance(state, dict) and state.get("state") == "on"
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError):
+            _LOG.debug("CasaTunes reply toggle unavailable; using satellite")
+        return False
 
     async def speak(self, *, device_id: str | None, text: str) -> DeliveryResult:
         text = text.strip()
         if not self.eligible(device_id) or not text or len(text) > 1500:
             return DeliveryResult.REJECTED
         try:
-            return await self._post(text)
+            route = self.route_for(device_id)
+            if route is None:
+                return await self._post(text)
+            return await self._post(text, service_name=route.service_name)
         except (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError) as exc:
             _LOG.warning("CasaTunes connection failed (%s)", type(exc).__name__)
             return DeliveryResult.REJECTED
@@ -103,11 +159,11 @@ class CasaTunesBridge:
             _LOG.warning("CasaTunes delivery outcome uncertain (%s)", type(exc).__name__)
             return DeliveryResult.UNCERTAIN
 
-    async def _post(self, text: str) -> DeliveryResult:
+    async def _post(self, text: str, *, service_name: str | None = None) -> DeliveryResult:
         c = self.config
         url = (
             c.ha_url.rstrip("/") + "/api/services/"
-            + c.service_domain + "/" + c.service_name
+            + c.service_domain + "/" + (service_name or c.service_name)
         )
         timeout = aiohttp.ClientTimeout(total=c.timeout_seconds)
         async with aiohttp.ClientSession(timeout=timeout) as session:

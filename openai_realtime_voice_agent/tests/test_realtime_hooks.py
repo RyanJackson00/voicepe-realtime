@@ -81,6 +81,31 @@ class TestTimelineHooks(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn.speech_audio_ms, 1150)
         self.assertIn("speech_stopped", turn.stamps)
 
+    async def test_standalone_farewell_closes_only_current_follow_up(self):
+        for source, words, item_id, closes in (
+            ("follow_up", "Thanks!", "current", True),
+            ("follow_up", "Thank you.", "current", True),
+            ("follow_up", "Thanks, what about tomorrow?", "current", False),
+            ("follow_up", "Thanks.", "stale", False),
+            ("wake_word", "Thanks.", "current", False),
+        ):
+            with self.subTest(source=source, words=words, item_id=item_id):
+                service = make_service()
+                service.turn_timeline.begin("t1", source=source)
+                service._followup_input_item = "current"
+                service.on_quiet_followup_close = AsyncMock()
+                event = SimpleNamespace(transcript=words, item_id=item_id)
+                with patch.object(OpenAIRealtimeLLMService,
+                                  "handle_evt_input_audio_transcription_completed",
+                                  new=AsyncMock()) as transcript, \
+                     patch.object(OpenAIRealtimeLLMService,
+                                  "_handle_evt_audio_delta", new=AsyncMock()) as audio:
+                    await service.handle_evt_input_audio_transcription_completed(event)
+                    await service._handle_evt_audio_delta(SimpleNamespace(response_id="r1"))
+                transcript.assert_awaited_once_with(event)
+                self.assertEqual(service.on_quiet_followup_close.await_count, int(closes))
+                self.assertEqual(audio.await_count, int(not closes))
+
     async def test_first_audio_delta_per_response_marks_and_notifies_once(self):
         service = make_service()
         service.turn_timeline.begin("t1")

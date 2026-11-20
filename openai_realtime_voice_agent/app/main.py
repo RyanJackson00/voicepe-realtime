@@ -300,6 +300,11 @@ def live_backend_instructions(
     return base + LIVE_BACKEND_RESULT_INSTRUCTIONS
 
 
+def is_followup_farewell(text: str) -> bool:
+    """Only an entire, standalone acknowledgement can close a follow-up."""
+    return " ".join(text.strip().strip(".,!?…").lower().split()) in {"thanks", "thank you"}
+
+
 class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
@@ -421,6 +426,8 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
         await super()._send_user_audio(frame)
 
     async def _handle_evt_speech_started(self, evt):  # type: ignore[override]
+        self._quiet_followup_closed = False
+        self._followup_input_item = getattr(evt, "item_id", None)
         timeline = self._timeline()
         if timeline is not None:
             turn = timeline.ensure_active()
@@ -439,7 +446,21 @@ class SafeRealtimeLLMService(GuardedToolsMixin, OpenAIRealtimeLLMService):
             )
         await super()._handle_evt_speech_stopped(evt)
 
+    async def handle_evt_input_audio_transcription_completed(self, evt):
+        timeline = self._timeline()
+        turn = timeline.current if timeline is not None else None
+        close = getattr(self, "on_quiet_followup_close", None)
+        if (close is not None and turn is not None and not turn.done
+                and turn.source == "follow_up"
+                and getattr(self, "_followup_input_item", None) == getattr(evt, "item_id", None)
+                and is_followup_farewell(evt.transcript or "")):
+            self._quiet_followup_closed = True
+            await close()
+        await super().handle_evt_input_audio_transcription_completed(evt)
+
     async def _handle_evt_audio_delta(self, evt):  # type: ignore[override]
+        if getattr(self, "_quiet_followup_closed", False):
+            return
         responses = getattr(self, "_responses_with_audio", None)
         if responses is None:
             responses = self._responses_with_audio = set()
@@ -1782,7 +1803,10 @@ class Application:
         session_properties = SessionProperties(
             # Voice-instructed memory: standing household notes are folded
             # into the instructions at every session creation.
-            instructions=self._conversation_instructions(),
+            instructions=self._conversation_instructions() + (
+                "\nIf a follow-up consists only of 'thanks' or 'thank you', stay silent and "
+                "call no tools. Answer any actual request even if it begins with thanks."
+            ),
             # Cap the reply length: bounds runaway monologues + per-response
             # output-token cost. None = unlimited (the API default "inf").
             max_output_tokens=self.max_output_tokens,

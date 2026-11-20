@@ -2913,7 +2913,9 @@ class OpenAILiveLLMService(GuardedToolsMixin, LLMService):
         if (reply.text.strip() and not reply.prompt_complete
                 and not self._confirmation_prompts_pending
                 and self.casatunes_device_authenticated
-                and self.casatunes_bridge.eligible(self.device_id)):
+                and await self.casatunes_bridge.selected(self.device_id)):
+            if self._suppress_output or not admission.can_deliver(reply) or self._reply_busy():
+                return
             result = await self.casatunes_bridge.speak(
                 device_id=self.device_id, text=reply.text
             )

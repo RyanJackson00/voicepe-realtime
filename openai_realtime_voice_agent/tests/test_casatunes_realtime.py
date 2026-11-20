@@ -15,7 +15,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, DeliveryResult
+from app.casatunes_bridge import CasaTunesBridge, CasaTunesBridgeConfig, CasaTunesRoute, DeliveryResult
 from app.casatunes_realtime import CasaTunesCompletedFrame, CasaTunesRealtimeOutput
 from app.device_registry import DeviceConnection
 from app.phase_emitter import ExternalReplyFrame, TurnLiveness
@@ -118,6 +118,29 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
             await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
         if wait and gate._delivery is not None:
             await gate._delivery
+
+    async def test_route_toggle_is_sampled_again_for_the_next_reply(self):
+        route = CasaTunesRoute("office-id", "input_boolean.office_replies", "office_speak")
+        backend = CasaTunesBridge(CasaTunesBridgeConfig(
+            enabled=True, ha_url="https://homeassistant.example", ha_token="test",
+            routes=(route,),
+        ))
+        backend.selected = AsyncMock(side_effect=(False, True))
+        backend.speak = AsyncMock(return_value=DeliveryResult.ACCEPTED)
+        gate = CasaTunesRealtimeOutput(device_id="office-id", bridge=backend, enable_direct_mode=True)
+        gate.push_frame = AsyncMock()
+
+        await self.reply(gate)
+        backend.speak.assert_not_awaited()
+        self.assertTrue(any(isinstance(c.args[0], TTSAudioRawFrame)
+                            for c in gate.push_frame.await_args_list))
+
+        gate.push_frame.reset_mock()
+        await self.reply(gate)
+        backend.speak.assert_awaited_once()
+        self.assertFalse(any(isinstance(c.args[0], TTSAudioRawFrame)
+                             for c in gate.push_frame.await_args_list))
+        self.assertEqual(backend.selected.await_count, 2)
 
     async def test_office_success_withholds_satellite_audio(self):
         gate, b = await self.make_processor()

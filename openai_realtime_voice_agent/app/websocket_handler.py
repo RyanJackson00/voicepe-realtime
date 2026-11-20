@@ -926,7 +926,7 @@ class WebSocketHandler:
             if bridge_output.bridge.eligible(client_id):
                 openai_service.casatunes_completion_marker = True
                 # Progress clips go directly to the satellite outside this pipeline.
-                openai_service.suppress_progress_ack = True
+                openai_service.suppress_progress_ack = bridge_output.bridge.route_for(client_id) is None
                 connection.casatunes_output = bridge_output
                 pipeline_components.append(bridge_output)
 
@@ -1192,6 +1192,19 @@ class WebSocketHandler:
                 logger.info(f"🛑 post-interrupt racing-response cancel no-op ({e!r})")
 
         controls.on_assistant_response_started(_kill_racing_response)
+
+        async def _close_quiet_followup():
+            route = getattr(connection, "casatunes_output", None)
+            if route is not None:
+                route.interrupt()
+            await phase_emitter.close_followup()
+            try:
+                await controls.cancel_active_response("standalone follow-up farewell")
+            except Exception:
+                logger.debug("Follow-up response already closed", exc_info=True)
+
+        if isinstance(openai_service, OpenAIRealtimeLLMService):
+            openai_service.on_quiet_followup_close = _close_quiet_followup
 
         async def _on_device_session_start(info=None):
             owner = getattr(connection, "speaker_owner", None)

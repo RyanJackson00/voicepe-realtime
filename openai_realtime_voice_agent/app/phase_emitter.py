@@ -223,6 +223,18 @@ class PhaseEmitter(FrameProcessor):
         self._cancel_silent()
         self._current = "idle"
 
+    async def close_followup(self) -> None:
+        """Close a completed farewell without reopening the device mic."""
+        if self._closed:
+            return
+        self._cancel_pending_idle()
+        self._cancel_watchdog()
+        self._cancel_silent()
+        self._suppress_thinking = True
+        self._turn_end("followup_closed")
+        await self._emit("idle", force=True, extra={"followup": False})
+        self.note_wake()
+
     async def force_idle(self, reason: str = "") -> None:
         """Declare the current turn dead and put the device in idle.
 

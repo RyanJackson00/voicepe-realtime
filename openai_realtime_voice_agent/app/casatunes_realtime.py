@@ -208,6 +208,14 @@ class CasaTunesRealtimeOutput(FrameProcessor):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._reset()
             self._drop_until_start = False
+            generation = self._generation
+            if self.bridge.route_for(self.device_id) is not None:
+                selected = await self.bridge.selected(self.device_id)
+                if generation != self._generation:
+                    return
+                if not selected:
+                    await self.push_frame(frame, direction)
+                    return
             self._buffering = True
             self._held = [frame]
             self._arm_watchdog(self._generation, direction)
