@@ -136,7 +136,7 @@ fi
 for option in wake_capture_ttl_days wake_label_ttl_days false_wake_flag_window_s \
               guest_mode_entity device_allowlist confirm_tools slow_tools \
               ack_silent_tools tts_voice \
-              mcp_persistent_session web_search_timeout_s \
+              mcp_persistent_session web_search_timeout_s casatunes_music_enabled casatunes_music_rooms \
               voice_runtime live_model live_backend_model live_reasoning_effort \
               live_service_tier live_backend_instructions live_acknowledge_gaps \
               live_audio_capture_ms live_stream_replies live_router live_fast_chat_model live_context_entities live_auto_expose \
@@ -159,6 +159,8 @@ for option in wake_capture_ttl_days wake_label_ttl_days false_wake_flag_window_s
             tts_voice) export TTS_VOICE="${value}" ;;
             mcp_persistent_session) export MCP_PERSISTENT_SESSION="${value}" ;;
             web_search_timeout_s) export WEB_SEARCH_TIMEOUT_S="${value}" ;;
+            casatunes_music_enabled) export CASATUNES_MUSIC_ENABLED="${value}" ;;
+            casatunes_music_rooms) export CASATUNES_MUSIC_ROOMS="${value}" ;;
             # GPT-Live canary runtime (unset = legacy Realtime; see DOCS.md).
             voice_runtime) export VOICE_RUNTIME="${value}" ;;
             live_model) export LIVE_MODEL="${value}" ;;

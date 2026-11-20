@@ -617,6 +617,18 @@ configuration:
       troubleshooting only. Leave off normally. (Also enables short wake
       clips when "Wake data kept" is auto.)
 
+  casatunes_music_enabled:
+    name: "🎵 CasaTunes · Enable music control"
+    description: >-
+      Opt-in only. Allow Jarvis to search and play music in explicitly allowed
+      CasaTunes zones. Leave disabled until tested; searching may change a
+      shared source queue, and Amazon Music selection cannot be guaranteed.
+  casatunes_music_rooms:
+    name: "🎵 CasaTunes · Allowed music zones"
+    description: >-
+      Comma-separated exact media_player entity IDs. Start with only the
+      Office zone. Other rooms sharing a source may hear its queue changes.
+
   # --- 🧩 Fork features ---
   instance_name:
     name: "🧩 Fork · Instance name (room)"

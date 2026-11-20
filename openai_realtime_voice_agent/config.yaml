@@ -146,6 +146,10 @@ options:
   # instance-wide set of settings (see the add-on Documentation tab, "Several devices").
   devices: []
 
+  # --- 🎵 CasaTunes native music (optional, off unless set) ---
+  # Enable only after specifying exact allowed CasaTunes media_player entities.
+  # These options have no defaults: existing installs are untouched.
+
   # --- ⚙️ Advanced ---
   websocket_port: 8080
   session_reuse_timeout_seconds: 300
@@ -242,6 +246,9 @@ schema:
       timer_ring_entity: str?
       room: str?
       voice: str?
+  # --- 🎵 CasaTunes native music controls (hidden until configured) ---
+  casatunes_music_enabled: bool?
+  casatunes_music_rooms: str?
   # --- ⚙️ Advanced ---
   websocket_port: int(1024,65535)
   session_reuse_timeout_seconds: int(0,3600)

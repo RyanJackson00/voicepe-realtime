@@ -2,6 +2,16 @@
 # Home Assistant in het Nederlands zien automatisch deze teksten; anderen de
 # Engelse (en.yaml). Groepen via emoji-prefix — zelfde volgorde als config.yaml.
 configuration:
+  casatunes_music_enabled:
+    name: "🎵 CasaTunes · Muziekbediening inschakelen"
+    description: >-
+      Optioneel. Laat de assistent muziek zoeken en afspelen in toegestane
+      CasaTunes-zones. Laat uit tot na het testen; Amazon Music is niet gegarandeerd.
+  casatunes_music_rooms:
+    name: "🎵 CasaTunes · Toegestane muziekzones"
+    description: >-
+      Komma-gescheiden exacte media_player-entiteits-ID's. Begin alleen met
+      de werkkamer; gedeelde bronnen hebben gedeelde afspeellijsten.
   # --- 🔑 Basis ---
   openai_api_key:
     name: "🔑 Basis · OpenAI API-sleutel"
