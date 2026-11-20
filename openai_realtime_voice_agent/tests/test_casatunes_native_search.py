@@ -77,6 +77,19 @@ class NativeMusicTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["ok"])
         tool._ha.assert_not_awaited()
 
+    async def test_playback_requires_matching_readback_metadata(self):
+        tool = NativeCasaTunesMusic(CONFIG)
+        tool._room_state = AsyncMock(side_effect=[
+            {"state":"off","attributes":{"source":"Dad","source_list":["Dad","Mom"]}},
+            {"state":"playing","attributes":{"source":"Dad","source_list":["Dad","Mom"],
+                                             "media_artist":"Greta Van Fleet"}}
+        ])
+        tool._ha = AsyncMock(return_value=[])
+        with patch("app.casatunes_native_search.aiohttp.ClientSession"):
+            result = await tool.request_music(ROOM,artist="Greta Van Fleet",mode="playNow")
+        self.assertTrue(result["playback_confirmed"])
+        self.assertEqual(result["status"],"Matching music playing according to Home Assistant")
+
     async def test_playing_source_in_other_room_blocks_queue_replacement(self):
         tool = NativeCasaTunesMusic(CONFIG)
         tool._room_state = AsyncMock(return_value={
