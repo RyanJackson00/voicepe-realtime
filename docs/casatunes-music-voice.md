@@ -1,61 +1,83 @@
-# CasaTunes music commands for Jarvis (development branch)
+# Jarvis → CasaTunes music and source control (draft)
 
-Status: **developer preview, disabled by default**. No production Home Assistant or CasaTunes settings were modified. This feature is independent of the Office ceiling-speaker announcement bridge.
+> Status: **implemented in draft PR #2, not deployed, not hardware-validated**. Independent of PR #1 (CasaTunes text-to-speech over ceiling speakers). Tested Home Assistant service definitions by read-only inspection; no music was played or queue modified during development.
 
-## User stories
+## What the user wants
 
-- “Hey Jarvis, play Greta Van Fleet in the living room from Amazon Music.”
-- “Play Highway Tune in the kitchen.”
-- “Set the office source to Dad.”
-- Future: add to queue, play next, grouping, queue editing, resume music after announcements.
+Say, “Hey Jarvis, play Greta Van Fleet in the living room from Amazon Music.” Jarvis should find the requested artist/album/track, choose a suitable CasaTunes source, assign it to the living room if needed, queue and start playback, and report the **actual** result. Follow-up commands should support adding songs/playlists, source switching, grouping, volume and stop.
 
-## Verified environment from private owner conversation
+**Distinctions:** Amazon Music is a catalog/service. "Dad", "Mom", "Piper", etc. are CasaTunes sources or stream players. Living Room, Kitchen, Office, etc. are zones. A music queue belongs to a source; assigning that source to a room makes the room hear it. If two rooms share Dad, replacing Dad's queue changes both rooms' music.
 
-Home Assistant already exposes CasaTunes zone `media_player` entities and existing group entities; their `source_list` contains configured player names. CasaTunes Amazon Music browsing is accessible through `media_player.browse_media`, including Playlists, Stations, Charts, Recommended, New and My Music. The players **do not advertise native Home Assistant search_media** in `supported_features`.
+## Verified capabilities, 2026-11-19
 
-The public CasaTunes documentation confirms a REST API at `/api/v1` (server-specific API sandbox at `/casadev`) and supports searching within one or multiple music services. **The detailed search route, parameter names, response shape, and playback semantics for this particular server remain unverified.** Never invent those details or claim an artist search succeeded when the configured contract is missing.
+The owner's Home Assistant exposes `media_player` entities for CasaTunes zones, with source list and supported browsing. Read-only `media_player.browse_media` returned Amazon Music, Spotify Browser, CasaTunes Playlists and other services, and Amazon Music categories Playlists, Stations, Charts, Recommended, New and My Music.
 
-## Architecture
+**Key discovery:** Home Assistant's active service registry also exposes the CasaTunes integration's dedicated `casatunes.search` entity action:
 
-There are three distinct objects:
+- `entity_id`: exact CasaTunes `media_player.*` room
+- `keyword_artist`: artist (e.g., "Greta Van Fleet")
+- `keyword_album`: album title
+- `keyword_track_name`: song title
+- `mode`:
+  - `playNow` — replace queue and play
+  - `playShuffle` — replace queue and shuffle
+  - `playUnshuffle` — replace queue and play unshuffled
+  - `add` — append to queue
+  - `addplay` — append and start newly added music
 
-1. Music **service**: Amazon Music, Spotify Browser, TuneIn, etc.
-2. Music **source/player**: CasaTunes configured names such as Dad or Mom. A source has a music queue.
-3. **Room/zone**: a Home Assistant CasaTunes `media_player`, configured to listen to a source. Multiple rooms may share one source.
+This is an official service **registered by the installed CasaTunes Home Assistant integration**, and is preferable to guessing undocumented direct REST search routes. The external CasaTunes documentation confirms it supports searching configured services, but **this Home Assistant action does not expose a service-specific selector**. It is NOT established that `keyword_artist` will search only Amazon Music or prioritize Amazon rather than another connected service. Do not claim it does until tested.
 
-A requested music service is not itself a room source. In a complete implementation, Jarvis must resolve a source, locate music within its selected service, queue/play that music on the source, route the source to the room, and verify state. Changing music for a source used by multiple rooms changes what all those rooms hear; do not overwrite another room's session silently.
+The integration's public source for an earlier version registers a `search` entity service that internally calls its CasaTunes library client. The schema observed in the owner's active Home Assistant instance is richer, so use the **live registry** as authority and verify actual behavior on the installed version. No live search action was executed because it can modify the queue.
 
-## New Python module
+## New implementation (feature branch)
 
-`app/casatunes_music_tool.py` provides (opt-in):
+- `app/casatunes_music_tool.py`: opt-in config, exact room allowlist and Supervisor proxy-only HA access; CasaTunes room source assignment with valid source check and post-call state verification.
+- `app/casatunes_native_search.py`: callable `casatunes_request_music(room,artist,album,track,mode,expected_source)`. Calls the installed `casatunes.search` Home Assistant service with the registered keyword and mode fields; rejects invalid/missing searches, unavailable rooms, mismatched expected source, and replace-queue requests when another enabled zone is already playing from that source.
+- `app/main.py`: Realtime and GPT-Live register these two tools only when enabled. Uses the existing `GuardedToolsMixin` shared by both voice runtimes.
+- `config.yaml` and `root/run.sh`: optional no-default `casatunes_music_enabled` and `casatunes_music_rooms` settings, passed into runtime; **existing installs remain unchanged**.
+- Unit tests run without reaching either Home Assistant or CasaTunes.
 
-- `casatunes_search_music(room, query, service)` — query a configured CasaTunes search API route, validate response, return selection keys. **Fails closed by default**, because the exact CasaDev search contract is not yet known.
-- `casatunes_play_music(room, selection)` — submit a prior verified search selection to Home Assistant's `media_player.play_media`. A response confirms HA accepted a request, not that the speaker played.
-- `casatunes_assign_source(room, source)` — check the room's actual available source list, send `select_source`, and verify the new reported source (which can lag). No arbitrary source name accepted.
+### Proposed add-on options once approved for canary
 
-These are registered for Realtime and GPT-Live only with the explicit opt-in flag. The feature intentionally does not emit a false spoken “Playing now” when no verified search API exists.
+In the private Home Assistant add-on configuration (never in public GitHub):
 
-## Environment (development only, not production instructions)
+```yaml
+casatunes_music_enabled: true
+casatunes_music_rooms: "media_player.YOUR_OFFICE_ENTITY,media_player.YOUR_LIVING_ROOM_ENTITY"
+```
 
-- `CASATUNES_MUSIC_ENABLED=false` default. Explicit `true` is required.
-- `CASATUNES_MUSIC_ROOMS`: comma-separated **exact**, owner-configured HA CasaTunes `media_player` IDs. No room is allowed by default.
-- `CASATUNES_MUSIC_HA_URL`: defaults to internal `http://supervisor/core`; prefer internal Supervisor token.
-- `CASATUNES_MUSIC_HA_TOKEN`: optional explicit token; falls back to `SUPERVISOR_TOKEN`.
-- `CASATUNES_MUSIC_API_URL`: trusted CasaTunes API base, e.g. `http://your-casa-server:8735`. Never hardcode a household address in this public repo.
-- `CASATUNES_MUSIC_SEARCH_ROUTE`: verified relative route beginning with `/api/v1/`. **NOT KNOWN YET.** Placeholder endpoints in code tests are not deployment instructions.
+The IDs above are **illustrations**, not the actual installation. Use verified live CasaTunes `media_player` entity IDs from the private Home Assistant instance; allow only selected room(s) initially.
 
-The current adapter expects a JSON top-level object with `results`, where each candidate has `title`, `media_content_id` and `media_content_type`. That is an **internal adapter interface, not a documented CasaTunes native response**. Before enabling, implement a version-specific mapper from the actual CasaDev search response to this shape. Confirm whether query parameter is `query`, source/service scoping, authentication, and whether Home Assistant `play_media` accepts the resulting IDs. Add fixture tests using **sanitized** actual server responses.
+No additional CasaTunes server URL or credential is needed for this path; the add-on uses Home Assistant's existing Supervisor proxy and the installed CasaTunes integration.
 
-## Before production enablement (required)
+### Return semantics
 
-1. In a local browser on the home network, inspect `http://<your-CasaTunes-host>/casadev`. Obtain the complete **Search** and **Play / Queue** method signatures and benign example JSON output. Redact addresses, credentials, private playlist names and anything household-identifying.
-2. Identify source instances and exact zone/source assignment. Verify the target *source* has a separate queue and is not serving another occupied room; add collision-prevention logic.
-3. Add adapter conversion tests from actual CasaDev responses, service filtering, invalid queries, zero/ambiguous results, duplicates, unauthorized access, service unavailable, and idempotency.
-4. Validate a read-only artist search for Greta Van Fleet on Amazon Music. Do not issue playback during discovery.
-5. Add tests ensuring an explicit user request for playback, choose a matching artist without false-positive autocomplete, then route and play safely.
-6. Verify playback result via actual entity state / API status and a user-heard Office or Living Room canary. Require explicit approval before making a live CasaTunes request that changes playback.
-7. Keep both CasaTunes voice feature branches in draft until tests and rollout gates pass. Confirm compatibility when combining with the separate announcement bridge.
+An HTTP success from `casatunes.search` means Home Assistant accepted a service request. It does **not** prove:
+- a matching artist/song was found;
+- which underlying music service supplied the match;
+- a source's current queue actually changed;
+- the intended room is on and playing;
+- audio is physically audible.
 
-### Why this is partial
+The current tool correctly returns a status plus explicit warning about those gaps. **The end-to-end voice command is not complete until result verification is added.** The model must never say “Playing Greta Van Fleet from Amazon Music now” without confirmation.
 
-A server-specific API contract cannot be established from the public generic REST overview alone. Implementing an undocumented endpoint and publishing it as working would be unsafe. The code and registration here form a safe starting point, **not completed artist search/voice playback**.
+## Rollout/acceptance gates before production
+
+1. Run Python compilation, relevant unit tests, full suite, code/security checks on the draft PR head. Repair any introduced failures.
+2. Review the active `casatunes.search` schema against local integration code to confirm mode handling and exact keyword fields; validate “from Amazon Music” scoping or add a true service-selective CasaTunes REST API call using the local `/casadev` schema.
+3. Verify source collision and queue replacement behavior with a harmless, private, dedicated test source, **with user approval**. No impact to music in other rooms.
+4. Read room state after action (source, playback state, track name/artist) and add bounded verification, handling async propagation without blindly retrying side effects.
+5. Add source auto-selection policy: choose an idle source, preserve active queues, and make explicit confirmation for replacing other rooms' music. Avoid a language model supplying its own authorization flag.
+6. Test requested content on Amazon, a nonexistent artist, ambiguous hits, source stopped/off, multiple rooms sharing source, and app/network failures.
+7. Test pause/stop, add-to-queue, queue display and grouping separately. Add new tools only when supported and tested.
+8. Canary on one explicitly approved room; leave existing PR #1 and all production CasaTunes/TTS settings intact.
+
+## Local testing notes
+
+CI will run without access to the user's CasaTunes LAN. Do **not** add private IPs, household names, album titles from personal libraries, access tokens, raw transcripts or production service responses to public CI artifacts.
+
+## Reference
+
+- [CasaTunes developer API documentation](https://www.casatunes.com/support/docs/rest-api) and local `/casadev` sandbox.
+- [CasaTunes search settings](https://www.casatunes.com/support/docs/casasetup).
+- [CasaTunes Home Assistant integration](https://github.com/jonkristian/casatunes), noting the installed version may differ from public repository source.
