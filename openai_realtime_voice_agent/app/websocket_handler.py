@@ -918,7 +918,7 @@ class WebSocketHandler:
 
         # gpt-realtime-2 (the currently installed model) uses Pipecat, not
         # GPT-Live's LiveReplyAdmission. The bridge is a no-op unless its
-        # environment opt-in and exact Office device ID are both configured.
+        # environment opt-in and a matching device route are configured.
         # Observe the reply before the assistant aggregator consumes the
         # response boundary and text frames. Keep the transcript tap upstream.
         if isinstance(openai_service, OpenAIRealtimeLLMService) and connection.authenticated:
@@ -926,7 +926,10 @@ class WebSocketHandler:
             if bridge_output.bridge.eligible(client_id):
                 openai_service.casatunes_completion_marker = True
                 # Progress clips go directly to the satellite outside this pipeline.
-                openai_service.suppress_progress_ack = bridge_output.bridge.route_for(client_id) is None
+                if bridge_output.bridge.route_for(client_id) is None:
+                    openai_service.suppress_progress_ack = True
+                else:
+                    openai_service.progress_ack_blocked = lambda: bridge_output.bridge.selected(client_id)
                 connection.casatunes_output = bridge_output
                 pipeline_components.append(bridge_output)
 

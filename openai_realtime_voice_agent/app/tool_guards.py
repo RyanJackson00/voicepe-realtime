@@ -185,6 +185,17 @@ class GuardedToolsMixin:
     def confirmation_requires_spoken_prompt_boundary(self) -> bool:
         return False
 
+    async def _progress_ack_allowed(self, turn) -> bool:
+        """Recheck the route and turn immediately before playing a cue."""
+        blocked = getattr(self, "progress_ack_blocked", None)
+        if blocked is not None and await blocked():
+            return False
+        return (
+            self.turn_timeline.current is turn and not turn.done
+            and not turn.meta.get("ack_played")
+            and ("first_audio_sent" not in turn.stamps or "bot_stopped" in turn.stamps)
+        )
+
     def _schedule_slow_tool_ack(self, function_name: str):
         """Play one short acknowledgement if a slow tool is still running.
 
@@ -214,6 +225,8 @@ class GuardedToolsMixin:
                 return
             if "first_audio_sent" in turn.stamps and "bot_stopped" not in turn.stamps:
                 return  # the assistant is speaking right now
+            if not await self._progress_ack_allowed(turn):
+                return
             tool, arguments = getattr(
                 self, "_progress_context", (function_name, {})
             )
@@ -278,6 +291,8 @@ class GuardedToolsMixin:
             if not getattr(self, "_progress_context", ("", {}))[0]:
                 early = early_progress_phrase(transcript)
                 if early:
+                    if not await self._progress_ack_allowed(turn):
+                        return
                     turn.meta["ack_played"] = True
                     turn.meta["ack_kind"] = "early_contextual_progress"
                     await prompts.say_text(early, timeline.device_id)
@@ -288,6 +303,8 @@ class GuardedToolsMixin:
                         return
                     if "first_audio_sent" in turn.stamps and "bot_stopped" not in turn.stamps:
                         return
+            if not await self._progress_ack_allowed(turn):
+                return
             tool, arguments = getattr(self, "_progress_context", ("", {}))
             turn.meta["ack_played"] = True
             turn.meta["ack_kind"] = "contextual_progress"
