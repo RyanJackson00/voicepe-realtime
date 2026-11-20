@@ -205,6 +205,10 @@ configuration:
     description: >-
       Exact websocket device ID of the Office satellite. Leave empty to
       keep all replies on the satellite speakers.
+  casatunes_routes:
+    name: "CasaTunes reply routing"
+    description: >-
+      One row per satellite. The dashboard helper selects the room’s REST command when on and the satellite speaker when off.
   mcp_tool_allowlist:
     name: "🏠 Home Assistant · Tool allow-list"
     description: >-

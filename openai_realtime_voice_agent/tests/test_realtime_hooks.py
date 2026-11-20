@@ -83,11 +83,11 @@ class TestTimelineHooks(unittest.IsolatedAsyncioTestCase):
 
     async def test_standalone_farewell_closes_only_current_follow_up(self):
         for source, words, item_id, closes in (
-            ("follow_up", "Thanks!", "current", True),
+            ("follow_up", "thanks!", "current", True),
             ("follow_up", "Thank you.", "current", True),
-            ("follow_up", "Thanks, what about tomorrow?", "current", False),
-            ("follow_up", "Thanks.", "stale", False),
-            ("wake_word", "Thanks.", "current", False),
+            ("follow_up", "thanks, what about tomorrow?", "current", False),
+            ("follow_up", "thanks.", "stale", False),
+            ("wake_word", "thanks.", "current", False),
         ):
             with self.subTest(source=source, words=words, item_id=item_id):
                 service = make_service()
