@@ -14,10 +14,13 @@ For standalone development, `CASATUNES_BRIDGE_ENABLED` and `CASATUNES_OFFICE_DEV
 
 - GPT-Live uses the existing `LiveReplyAdmission` buffer. The bridge leaves confirmation prompts on the satellite and disables streaming delivery for the eligible device so its original audio is available for fallback.
 - Pipecat Realtime buffers audio and transcript until the server confirms a completed response. Pending confirmations, confirmation-like replies, and text-only responses stay local. A device stop or barge-in invalidates held frames and any outstanding local request. The hold timeout and audio limit release the original frames in order.
+- The bridged Realtime connection skips local spoken progress prompts. Other connections keep their configured progress prompts. Audible errors and confirmation prompts still have their normal paths.
 - Successful nested CasaTunes status suppresses satellite PCM. A definitive rejection releases PCM when the reply is still current. After an ambiguous timeout, malformed response, or proxy error, the bridge skips both retry and PCM replay because the original announcement may already be playing.
 - After external delivery or an uncertain outcome, the satellite returns to idle without opening follow-up listening. A new wake starts the next turn.
 
 The returned status confirms endpoint acceptance. Audible playback, music resumption, and cancellation after dispatch still require hardware validation. Local interruption cannot revoke an already dispatched announcement.
+
+The Realtime delivery log reports milliseconds from model completion to service dispatch and from dispatch to the service result. Neither measurement uses a speaker playback signal.
 
 ## Office canary
 

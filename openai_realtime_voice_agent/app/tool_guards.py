@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 class GuardedToolsMixin:
     """register_function() with the speaker/action gates and liveness ticks."""
 
+    suppress_progress_ack = False
+
     def register_function(self, function_name, handler, start_callback=None, *,
                           cancel_on_interruption: bool = True):  # type: ignore[override]
         """Force cancel_on_interruption=False for every tool registration.
@@ -192,7 +194,7 @@ class GuardedToolsMixin:
         """
         prompts = getattr(self, "spoken_prompts", None)
         timeline = getattr(self, "turn_timeline", None)
-        if prompts is None or not prompts.enabled or timeline is None:
+        if self.suppress_progress_ack or prompts is None or not prompts.enabled or timeline is None:
             return None
         # The phase-level task survives a fast tool completion and is cancelled
         # only when real answer audio/user speech/turn end arrives.  Merely
@@ -252,7 +254,7 @@ class GuardedToolsMixin:
         """Arm one contextual acknowledgement after a real user request."""
         prompts = getattr(self, "spoken_prompts", None)
         timeline = getattr(self, "turn_timeline", None)
-        if prompts is None or not prompts.enabled or timeline is None:
+        if self.suppress_progress_ack or prompts is None or not prompts.enabled or timeline is None:
             return
         transcript = getattr(self, "_last_user_text", "")
         if not looks_like_request(transcript) or looks_like_instant_local(transcript):

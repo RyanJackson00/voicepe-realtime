@@ -131,8 +131,8 @@ def _env_list(name: str, default: str = "") -> list:
 TOOL_ACK_INSTRUCTIONS = """
 
 TOOL USE: Call tools without announcing them — never say "let me check" or
-"one moment" before or while a tool runs. When a lookup is slow, the device
-plays a short acknowledgement by itself. Speak once, with the result.
+"one moment" before or while a tool runs. The app handles any progress cue.
+Speak once, with the result.
 """
 
 CONFIRMATION_INSTRUCTIONS = """

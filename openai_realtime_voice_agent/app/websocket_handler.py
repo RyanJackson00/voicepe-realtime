@@ -925,6 +925,8 @@ class WebSocketHandler:
             bridge_output = CasaTunesRealtimeOutput(device_id=client_id)
             if bridge_output.bridge.eligible(client_id):
                 openai_service.casatunes_completion_marker = True
+                # Progress clips go directly to the satellite outside this pipeline.
+                openai_service.suppress_progress_ack = True
                 connection.casatunes_output = bridge_output
                 pipeline_components.append(bridge_output)
 

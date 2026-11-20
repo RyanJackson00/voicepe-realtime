@@ -66,6 +66,7 @@ class RealtimeCasaTunesPipelineTests(unittest.IsolatedAsyncioTestCase):
             with patch("app.websocket_handler.OpenAIRealtimeLLMService", ForwardingService), \
                  patch("app.casatunes_realtime.CasaTunesBridge", return_value=backend):
                 _, runner, task = handler.build_pipeline(connection)
+            self.assertTrue(connection.openai_service.suppress_progress_ack)
             worker = asyncio.create_task(runner.run(task))
             try:
                 await asyncio.wait_for(sink.started.wait(), 3)
@@ -118,7 +119,14 @@ class RealtimeCasaTunesTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_office_success_withholds_satellite_audio(self):
         gate, b = await self.make_processor()
-        await self.reply(gate)
+        with self.assertLogs("app.casatunes_realtime", level="INFO") as captured:
+            await self.reply(gate)
+        self.assertRegex(
+            captured.output[0],
+            r"CasaTunes delivery timing result=accepted model_complete_to_dispatch_ms=\d+ "
+            r"service_roundtrip_ms=\d+$",
+        )
+        self.assertNotIn("Hello from Jarvis", "\n".join(captured.output))
         b.speak.assert_awaited_once_with(device_id="office-id", text="Hello from Jarvis")
         emitted = [call.args[0] for call in gate.push_frame.await_args_list]
         self.assertFalse(any(isinstance(f, TTSAudioRawFrame) for f in emitted))
