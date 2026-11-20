@@ -31,7 +31,7 @@ def get_native_music_tool_definition() -> dict[str, Any]:
         "parameters": {
             "type": "object",
             "properties": {
-                "room": {"type":"string","description":"Exact Home Assistant CasaTunes media_player entity ID"},
+                "room": {"type":"string","description":"Spoken room label such as living room, or exact allowed CasaTunes media_player ID"},
                 "artist": {"type":"string","description":"Artist name, e.g., Greta Van Fleet"},
                 "album": {"type":"string","description":"Album title, optional"},
                 "track": {"type":"string","description":"Song title, optional"},
@@ -49,6 +49,7 @@ class NativeCasaTunesMusic(CasaTunesMusic):
         self, room: str, artist: str = "", album: str = "", track: str = "",
         mode: str = "playNow", expected_source: str = "",
     ) -> dict:
+        room = self.config.resolve_room(room) or ""
         if not self.config.valid_room(room):
             return {"ok": False, "error": "CasaTunes music is not enabled for this room"}
         if mode not in MODES:
