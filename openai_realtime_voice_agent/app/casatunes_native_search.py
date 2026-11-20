@@ -105,13 +105,43 @@ class NativeCasaTunesMusic(CasaTunesMusic):
                 # CasaTunes's registered entity service does not report a rich
                 # result list. A 2xx only means HA accepted the service call.
                 await self._ha(session, "POST", "/api/services/casatunes/search", data)
+                # Acceptance and actual playback are different outcomes.
+                # Never retry the potentially queue-mutating POST. Poll only
+                # the read-only state and require matching metadata before
+                # marking playback confirmed.
+                confirmed = False
+                observed = {}
+                if mode != "add":
+                    for attempt in range(4):
+                        if attempt:
+                            await asyncio.sleep(0.4)
+                        try:
+                            updated = await self._room_state(session, room)
+                        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, MusicError):
+                            break
+                        observed = updated.get("attributes") or {}
+                        artist_now = str(observed.get("media_artist") or "").casefold()
+                        title_now = str(observed.get("media_title") or "").casefold()
+                        album_now = str(observed.get("media_album_name") or "").casefold()
+                        match = (
+                            (bool(terms["keyword_artist"]) and terms["keyword_artist"].casefold() in artist_now)
+                            or (bool(terms["keyword_track_name"]) and terms["keyword_track_name"].casefold() in title_now)
+                            or (bool(terms["keyword_album"]) and terms["keyword_album"].casefold() in album_now)
+                        )
+                        if updated.get("state") == "playing" and match:
+                            confirmed = True
+                            break
                 return {"ok": True, "room": room, "source": source,
                         "request": {"artist":bool(terms["keyword_artist"]),
                                     "album":bool(terms["keyword_album"]),
                                     "track":bool(terms["keyword_track_name"]),
                                     "mode":mode},
-                        "status":"CasaTunes search/play request accepted by Home Assistant",
-                        "warning":"Specific music match, Amazon service, and audible playback not verified"}
+                        "status":("Matching music playing according to Home Assistant"
+                                  if confirmed else "CasaTunes request accepted, playback unverified"),
+                        "playback_confirmed": confirmed,
+                        "warning":("Amazon Music origin and physical audio are not verified"
+                                   if confirmed else
+                                   "Specific music match, Amazon origin and audible playback not verified")}
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, MusicError) as exc:
             LOG.warning("CasaTunes music command failed (%s)", type(exc).__name__)
             return {"ok":False,"error":str(exc) if isinstance(exc,MusicError)
