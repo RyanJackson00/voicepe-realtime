@@ -157,6 +157,38 @@ class CasaTunesMusic:
             return {"ok": False, "error": str(exc) if isinstance(exc, MusicError)
                     else "CasaTunes search is unavailable"}
 
+    async def assign_source(self, room: str, source: str) -> dict:
+        """Assign an existing CasaTunes source to a room; never guess a source."""
+        if not self.config.valid_room(room):
+            return {"ok": False, "error": "Room is not enabled for CasaTunes music control"}
+        if not _SOURCE_RE.fullmatch(source):
+            return {"ok": False, "error": "Invalid source name"}
+        timeout = aiohttp.ClientTimeout(total=self.config.timeout)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                state = await self._room_state(session, room)
+                attrs = state.get("attributes") or {}
+                source_list = attrs.get("source_list")
+                if not isinstance(source_list, list) or source not in source_list:
+                    return {"ok": False, "error": "The requested CasaTunes source is not available"}
+                if state.get("state") == "unavailable":
+                    return {"ok": False, "error": "Room is unavailable"}
+                if attrs.get("source") == source:
+                    return {"ok": True, "room": room, "source": source,
+                            "status": "Source was already assigned"}
+                await self._ha(session, "POST", "/api/services/media_player/select_source",
+                               {"entity_id": room, "source": source})
+                confirmed = await self._room_state(session, room)
+                if (confirmed.get("attributes") or {}).get("source") != source:
+                    return {"ok": False, "room": room,
+                            "error": "Source command accepted but new source was not yet verified"}
+                return {"ok": True, "room": room, "source": source,
+                        "status": "Source assignment verified"}
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, MusicError) as exc:
+            LOG.warning("CasaTunes source change unavailable (%s)", type(exc).__name__)
+            return {"ok": False, "error": str(exc) if isinstance(exc, MusicError)
+                    else "Source request failed or verification was unavailable"}
+
     async def play(self, room: str, selection: str) -> dict:
         if not self.config.valid_room(room) or room != self._candidate_room:
             return {"ok":False,"error":"The room must match the latest search"}
@@ -193,6 +225,12 @@ def get_music_tool_definitions() -> list[dict[str, Any]]:
              "query":{"type":"string","description":"Artist, song, album or playlist"},
              "service":{"type":"string","description":"Music service; default Amazon Music"}},
              "required":["room","query"]}},
+        {"type":"function","name":"casatunes_assign_source",
+         "description":"Assign an existing CasaTunes player/source such as Dad or Mom to an allowed room. Validate source against the room's source_list; returns verified status.",
+         "parameters":{"type":"object","properties":{
+             "room":{"type":"string","description":"Exact allowlisted Home Assistant CasaTunes room entity ID"},
+             "source":{"type":"string","description":"Existing CasaTunes source name"}},
+             "required":["room","source"]}},
         {"type":"function","name":"casatunes_play_music",
          "description":"Play a previously searched CasaTunes result in its same room. Use only selection key returned from casatunes_search_music, after user requested playback.",
          "parameters":{"type":"object","properties":{
@@ -211,5 +249,10 @@ def register_music_tools(service: Any, music: CasaTunesMusic) -> None:
         args = params.arguments or {}
         await params.result_callback(await music.play(
             str(args.get("room","")), str(args.get("selection",""))))
+    async def assign(params):
+        args = params.arguments or {}
+        await params.result_callback(await music.assign_source(
+            str(args.get("room","")), str(args.get("source",""))))
+    service.register_function("casatunes_assign_source", assign)
     service.register_function("casatunes_search_music", find)
     service.register_function("casatunes_play_music", play)
