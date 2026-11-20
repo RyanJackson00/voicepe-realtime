@@ -42,7 +42,7 @@ class MusicConfigTests(unittest.TestCase):
 
     def test_tool_definitions_present(self):
         names = {tool["name"] for tool in get_music_tool_definitions()}
-        self.assertEqual(names, {"casatunes_search_music","casatunes_play_music"})
+        self.assertEqual(names, {"casatunes_search_music","casatunes_play_music","casatunes_assign_source"})
 
 
 class MusicBehaviorTests(unittest.IsolatedAsyncioTestCase):
@@ -62,6 +62,15 @@ class MusicBehaviorTests(unittest.IsolatedAsyncioTestCase):
             ha_token="fake"))
         with patch("app.casatunes_music_tool.aiohttp.ClientSession") as sess:
             result = await music.play("media_player.office", "1")
+            sess.assert_not_called()
+        self.assertFalse(result["ok"])
+
+    async def test_assign_source_wrong_room_fails_closed(self):
+        music = CasaTunesMusic(MusicConfig(
+            enabled=True, allowed_rooms=("media_player.office",),
+            ha_token="fake"))
+        with patch("app.casatunes_music_tool.aiohttp.ClientSession") as sess:
+            result = await music.assign_source("media_player.outside", "Dad")
             sess.assert_not_called()
         self.assertFalse(result["ok"])
 
