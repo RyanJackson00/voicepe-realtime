@@ -55,6 +55,28 @@ class MusicConfig:
         )
 
 
+    def resolve_room(self, room: str) -> str | None:
+        """Resolve ordinary spoken room labels against only allowlisted zones.
+
+        Deliberately exact after normalization, not fuzzy matching: similar
+        names (hallway vs hallway wall) must never get silently conflated.
+        """
+        if self.valid_room(room):
+            return room
+        label = re.sub(r"[^a-z0-9]+", "", room.lower())
+        if not label or not self.enabled:
+            return None
+        matches = []
+        for entity in self.allowed_rooms:
+            if not self.valid_room(entity):
+                continue
+            suffix = entity.split(".",1)[1]
+            suffix = re.sub(r"^[0-9]+_", "", suffix)
+            if re.sub(r"[^a-z0-9]+", "", suffix) == label:
+                matches.append(entity)
+        return matches[0] if len(matches) == 1 else None
+
+
 class MusicError(Exception):
     pass
 
@@ -89,6 +111,7 @@ class CasaTunesMusic:
 
     async def assign_source(self, room: str, source: str) -> dict:
         """Assign an existing CasaTunes source, checking the reported outcome."""
+        room = self.config.resolve_room(room) or ""
         if not self.config.valid_room(room):
             return {"ok":False,"error":"Room not enabled for CasaTunes control"}
         if not _SOURCE_RE.fullmatch(source):
@@ -123,7 +146,7 @@ def get_music_tool_definitions() -> list[dict[str, Any]]:
         "type":"function","name":"casatunes_assign_source",
         "description":"Assign an existing CasaTunes player/source such as Dad or Mom to an allowlisted room. Validates the source and checks the new HA state.",
         "parameters":{"type":"object","properties":{
-            "room":{"type":"string","description":"Exact allowed CasaTunes media_player entity ID"},
+            "room":{"type":"string","description":"Spoken CasaTunes room name (living room) or exact allowed media_player ID"},
             "source":{"type":"string","description":"Existing CasaTunes source name"}},
             "required":["room","source"]},
     }]
